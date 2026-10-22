@@ -1,5 +1,3 @@
-import { gsap } from 'gsap'
-import { ScrollTrigger } from 'gsap/ScrollTrigger'
 import Lenis from 'lenis'
 import {
   BloomEffect,
@@ -20,7 +18,7 @@ import {
   HemisphereLight,
   Mesh,
   NoToneMapping,
-  PCFSoftShadowMap,
+  PCFShadowMap,
   PerspectiveCamera,
   PMREMGenerator,
   Scene,
@@ -32,18 +30,21 @@ import {
   WebGLRenderer,
   HalfFloatType,
   BackSide,
+  Color,
 } from 'three'
-import { screens, type ScreenId } from './brand'
-import { burstAmount, loadIgloo, makeLabelSlots, type Igloo, type LabelAnchor } from './igloo'
-import { clamp, lerp, sectionProgress, smoother } from './math'
+import { brand, type ScreenId } from './brand'
+import { createFigure } from './figure'
+import { loadIgloo, makeLabelSlots, type Igloo, type LabelAnchor } from './igloo'
+import { clamp, lerp, smoother } from './math'
+import { createMeteor, meteorCenter, type Meteor } from './meteor'
 import type { Overlay, ProjectedLabel } from './overlay'
 import { detectQuality, reducedMotion } from './quality'
+import { createRings } from './rings'
 import { Ambience } from './sound'
+import { WarpEffect } from './warp'
 import { createWorld, sampleHeight } from './world'
 
-gsap.registerPlugin(ScrollTrigger)
-
-type Keyframe = { at: number; pos: [number, number, number]; target: [number, number, number] }
+type Marks = { rift: number; meteor: number; rings: number; figure: number }
 
 declare global {
   interface Window {
@@ -53,6 +54,13 @@ declare global {
     }
   }
 }
+
+const HIGH: readonly [number, number, number] = [0.15, 10.6, 6.2]
+const HIGH_TARGET: readonly [number, number, number] = [0.05, 0.85, 0.1]
+const EYE: readonly [number, number, number] = [0.7, 2.25, 10.6]
+const EYE_TARGET: readonly [number, number, number] = [0.05, 1.4, 0.05]
+const WIDE: readonly [number, number, number] = [1.05, 3.15, 15.2]
+const WIDE_TARGET: readonly [number, number, number] = [0.0, 1.75, 0.0]
 
 export async function startExperience(overlay: Overlay) {
   const canvas = document.querySelector('#view')
@@ -73,17 +81,17 @@ export async function startExperience(overlay: Overlay) {
   renderer.outputColorSpace = SRGBColorSpace
   renderer.toneMapping = NoToneMapping
   renderer.transmissionResolutionScale = quality.low ? 0.35 : 0.5
-  renderer.setClearColor('#c5ced4', 1)
+  renderer.setClearColor('#c5c8cc', 1)
   if (quality.shadows) {
     renderer.shadowMap.enabled = true
-    renderer.shadowMap.type = PCFSoftShadowMap
+    renderer.shadowMap.type = PCFShadowMap
   }
 
   const scene = new Scene()
-  const camera = new PerspectiveCamera(33, 1, 0.08, 420)
+  const camera = new PerspectiveCamera(36, 1, 0.05, 220)
   const world = createWorld(scene, quality)
   scene.environment = createEnvironment(renderer)
-  scene.environmentIntensity = 0.34
+  scene.environmentIntensity = 0.36
   addLights(scene, quality.shadows)
 
   const composer = new EffectComposer(renderer, {
@@ -91,26 +99,28 @@ export async function startExperience(overlay: Overlay) {
     multisampling: 0,
   })
   const bloom = new BloomEffect({
-    intensity: 0.28,
-    luminanceThreshold: 0.86,
-    luminanceSmoothing: 0.18,
+    intensity: 0.4,
+    luminanceThreshold: 0.72,
+    luminanceSmoothing: 0.2,
     mipmapBlur: true,
-    radius: 0.62,
+    radius: 0.68,
   })
   const chromatic = new ChromaticAberrationEffect({
-    offset: new Vector2(0.00035, 0.0002),
+    offset: new Vector2(0.0004, 0.0002),
     radialModulation: true,
-    modulationOffset: 0.18,
+    modulationOffset: 0.12,
   })
+  const warp = new WarpEffect()
   const noise = new NoiseEffect({
     blendFunction: BlendFunction.OVERLAY,
     premultiply: true,
   })
-  noise.blendMode.setOpacity(0.16)
-  const vignette = new VignetteEffect({ darkness: 0.28, offset: 0.3 })
+  noise.blendMode.setOpacity(0.14)
+  const vignette = new VignetteEffect({ darkness: 0.32, offset: 0.28 })
   const smaa = quality.smaa ? new SMAAEffect({ preset: SMAAPreset.MEDIUM }) : null
   composer.addPass(new RenderPass(scene, camera))
   composer.addPass(new EffectPass(camera, bloom))
+  composer.addPass(new EffectPass(camera, warp))
   composer.addPass(new EffectPass(camera, chromatic))
   if (smaa) composer.addPass(new EffectPass(camera, smaa))
   composer.addPass(
@@ -139,8 +149,8 @@ export async function startExperience(overlay: Overlay) {
     lerp: 0.085,
     smoothWheel: true,
     syncTouch: false,
+    autoRaf: false,
   })
-  lenis.on('scroll', ScrollTrigger.update)
   lenis.stop()
   if ('scrollRestoration' in history) history.scrollRestoration = 'manual'
   window.scrollTo(0, 0)
@@ -148,17 +158,6 @@ export async function startExperience(overlay: Overlay) {
   overlay.onNavigate((id) => {
     lenis.scrollTo(`#${id}`, { offset: 0 })
   })
-
-  for (const section of screens) {
-    ScrollTrigger.create({
-      trigger: overlay.sections[section.id],
-      start: 'top 68%',
-      end: 'bottom 42%',
-      onToggle: (self) => {
-        if (self.isActive) overlay.setActive(section.id)
-      },
-    })
-  }
 
   window.__blendy = {
     scrollTo(y) {
@@ -170,11 +169,22 @@ export async function startExperience(overlay: Overlay) {
     },
   }
 
+  const meteor = createMeteor(quality)
+  const rings = createRings(quality)
+  const figure = createFigure(quality)
+  scene.add(meteor.group, rings.group, figure.group)
+  meteor.group.visible = false
+  rings.group.visible = false
+  figure.group.visible = false
+
   const pos = new Vector3()
   const target = new Vector3()
+  const up = new Vector3(0, 1, 0)
   const ndc = new Vector3()
+  const clear = new Color('#c5c8cc')
   let igloo: Igloo | null = null
   let slots: LabelAnchor[] = []
+  const meteorSlots: LabelAnchor[] = makeLabelSlots(meteor.labelCount)
   let shown = 0
   let targetProgress = 0.04
   let ready = false
@@ -182,18 +192,18 @@ export async function startExperience(overlay: Overlay) {
   let samples = 0
   let accum = 0
   let adapted = false
-  let revealedAt = 0
   const started = performance.now()
+  let screen: ScreenId = 'field'
+  let cornerPulsed = false
 
   const reveal = () => {
     if (revealed) return
     revealed = true
     overlay.hideLoader()
+    overlay.revealChrome()
     overlay.setActive('field')
     lenis.resize()
     lenis.start()
-    ScrollTrigger.refresh()
-    revealedAt = performance.now()
   }
 
   void loadIgloo(quality, sampleHeight, (value) => {
@@ -202,56 +212,82 @@ export async function startExperience(overlay: Overlay) {
     .then((loaded) => {
       igloo = loaded
       scene.add(loaded.group)
-      const core = new Vector3()
-      loaded.copyCore(core)
-      world.placeLattice(core.x, sampleHeight(core.x, core.z), core.z)
       slots = makeLabelSlots(loaded.labelCount)
       targetProgress = 1
       ready = true
     })
     .catch((error: unknown) => {
       console.error(error)
-      overlay.fail('The field failed to load.')
+      overlay.fail(brand.loader.error)
     })
 
-  gsap.ticker.lagSmoothing(0)
-  gsap.ticker.add((time, deltaMs) => {
-    const dt = Math.min(0.05, deltaMs / 1000)
-    lenis.raf(time * 1000)
-    if (document.hidden) return
+  let last = performance.now()
+  const frame = (now: number) => {
+    const dt = Math.min(0.05, (now - last) / 1000)
+    last = now
+    lenis.raf(now)
+    if (!document.hidden) {
+      shown = lerp(shown, targetProgress, 0.08)
+      if (!revealed) overlay.setProgress(shown)
+      if (ready && shown > 0.985 && now - started > 550) reveal()
 
-    shown = lerp(shown, targetProgress, 0.08)
-    if (!revealed) overlay.setProgress(shown)
-    if (ready && shown > 0.985 && performance.now() - started > 550) reveal()
+      const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight)
+      const global = clamp(lenis.scroll / maxScroll, 0, 1)
+      const marks = readMarks(maxScroll)
+      const phase = readPhase(global, marks)
 
-    const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight)
-    const global = clamp(lenis.scroll / maxScroll, 0, 1)
-    const releaseT = sectionProgress(overlay.sections.release)
-    const latticeT = sectionProgress(overlay.sections.lattice)
-    const anim = burstAmount(releaseT)
-    const dissolve = smoothstepRelease(latticeT)
+      world.update(now / 1000, phase.mood)
+      clear.copy(world.fog.color)
+      renderer.setClearColor(clear, 1)
+      scene.environmentIntensity = phase.screen === 'meteor' || phase.screen === 'rift' ? 0.85 : 0.36
 
-    world.update(time, latticeT)
-    world.setReveal(smoothstepRelease(latticeT, 0.05, 0.42))
-    igloo?.update(anim, dissolve, latticeT, time)
-    const intro = cameraIntro(revealed, revealedAt, global)
-    applyCamera(global, time, anim, pos, target, camera, intro)
+      igloo?.update(phase.burst, phase.solid, phase.dissolve)
+      meteor.update(phase.meteorReveal)
+      rings.update(phase.ringsT, phase.ringsShown)
+      figure.update(phase.figureAppear, phase.figureBlow, reducedMotion ? 0 : now / 1000, dpr)
 
-    const spike = Math.exp(-((latticeT - 0.16) ** 2) / 0.0035)
-    bloom.intensity = 0.2 + anim * 0.32 + spike * 0.16
-    chromatic.offset.set(0.00035 + spike * 0.005, 0.00018 + spike * 0.0026)
-    overlay.setFlash(spike * 0.42)
-    overlay.setUiDim(1 - anim * 0.06)
-    overlay.setScrollProgress(global)
-    projectLabels(overlay, igloo, slots, camera, ndc, latticeT, intro)
-    overlay.setTelemetry(
-      igloo ? igloo.readout(anim) : 'HOLD',
-      `${camera.position.x.toFixed(2)}   ${camera.position.y.toFixed(2)}   ${camera.position.z.toFixed(2)}`,
-    )
+      applyCamera(phase, pos, target, up, camera)
+      applyGrade(phase, bloom, chromatic, warp, camera.aspect)
+      overlay.setFlash(phase.flash * 0.35)
+      overlay.setUiDim(phase.screen === 'rings' ? 1 : 1 - phase.burst * 0.04)
+      overlay.setScrollProgress(global)
 
-    composer.render(dt)
-    adaptFrame(dt)
-  })
+      if (phase.screen !== screen) {
+        screen = phase.screen
+        overlay.setActive(screen)
+      }
+      if (!cornerPulsed && phase.burst > 0.04 && phase.screen === 'field') {
+        cornerPulsed = true
+        overlay.scrambleCorner()
+      }
+      if (phase.burst < 0.01) cornerPulsed = false
+
+      projectLabels(overlay, activeAnchors(phase, igloo, slots, meteor, meteorSlots), camera, ndc, phase.labelOpacity)
+      const linkIndex = Math.min(
+        brand.links.length - 1,
+        Math.max(0, Math.floor(clamp((phase.figureT - 0.12) / 0.62, 0, 0.999) * brand.links.length)),
+      )
+      const link = brand.links[linkIndex] ?? brand.links[0]
+      overlay.setCycle(link.label, link.value, phase.cycle)
+      overlay.setTelemetry(
+        igloo && phase.screen === 'field'
+          ? igloo.readout(phase.burst, phase.solid)
+          : phase.screen === 'rift'
+            ? 'RIFT'
+            : phase.screen === 'meteor'
+              ? 'MASS'
+              : phase.screen === 'rings'
+                ? 'RINGS'
+                : 'WITNESS',
+        `${camera.position.x.toFixed(2)}   ${camera.position.y.toFixed(2)}   ${camera.position.z.toFixed(2)}`,
+      )
+
+      composer.render(dt)
+      adaptFrame(dt)
+    }
+    requestAnimationFrame(frame)
+  }
+  requestAnimationFrame(frame)
 
   function adaptFrame(dt: number) {
     if (!revealed || adapted) return
@@ -264,148 +300,262 @@ export async function startExperience(overlay: Overlay) {
     }
     adapted = true
   }
-
 }
 
-function cameraIntro(revealed: boolean, revealedAt: number, global: number) {
-  if (!revealed || reducedMotion || global > 0.004) return 1
-  return clamp((performance.now() - revealedAt) / 2100, 0, 1)
+type Phase = {
+  screen: ScreenId
+  fieldT: number
+  riftT: number
+  meteorT: number
+  ringsT: number
+  figureT: number
+  burst: number
+  solid: number
+  dissolve: number
+  meteorReveal: number
+  ringsShown: number
+  figureAppear: number
+  figureBlow: number
+  mood: number
+  ripple: number
+  blur: number
+  glitch: number
+  white: number
+  flash: number
+  chroma: number
+  labelOpacity: number
+  cycle: number
 }
 
-function smoothstepRelease(value: number, edge0 = 0.08, edge1 = 0.4) {
-  const t = clamp((value - edge0) / (edge1 - edge0), 0, 1)
-  return t * t * (3 - 2 * t)
+function readMarks(maxScroll: number): Marks {
+  const at = (id: string) => (document.getElementById(id)?.offsetTop ?? 0) / maxScroll
+  return {
+    rift: at('rift'),
+    meteor: at('meteor'),
+    rings: at('rings'),
+    figure: at('figure'),
+  }
 }
 
-function applyCamera(
-  global: number,
-  time: number,
-  anim: number,
-  pos: Vector3,
-  target: Vector3,
-  camera: PerspectiveCamera,
-  intro: number,
-) {
-  const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight)
-  const range = (id: ScreenId) => {
-    const el = document.getElementById(id)
-    const top = el?.offsetTop ?? 0
-    const height = el?.offsetHeight ?? window.innerHeight
-    return {
-      start: top / maxScroll,
-      end: Math.max(top / maxScroll + 0.0001, (top + height - window.innerHeight) / maxScroll),
+function span(global: number, start: number, end: number) {
+  return clamp((global - start) / Math.max(0.0001, end - start), 0, 1)
+}
+
+function readPhase(global: number, marks: Marks): Phase {
+  const fieldT = span(global, 0, marks.rift)
+  const riftT = span(global, marks.rift, marks.meteor)
+  const meteorT = span(global, marks.meteor, marks.rings)
+  const ringsT = span(global, marks.rings, marks.figure)
+  const figureT = span(global, marks.figure, 1)
+
+  const inField = global < marks.rift
+  const inRift = global >= marks.rift && global < marks.meteor
+  const inMeteor = global >= marks.meteor && global < marks.rings
+  const inRings = global >= marks.rings && global < marks.figure
+  const inFigure = global >= marks.figure
+
+  const solid = inField ? smoother(clamp((fieldT - 0.12) / 0.28, 0, 1)) : 1
+  const burst = inField ? clamp((fieldT - 0.42) / 0.58, 0, 1) : 1
+  const dissolve = inField ? 0 : inRift ? smoother(clamp((riftT - 0.22) / 0.56, 0, 1)) : 1
+  const meteorReveal = inField ? 0 : inRift ? smoother(clamp((riftT - 0.34) / 0.5, 0, 1)) : inMeteor ? 1 - smoother(clamp((meteorT - 0.8) / 0.2, 0, 1)) : 0
+  const ringsShown = inRings ? 1 : 0
+  const figureAppear = inFigure ? smoother(clamp(figureT / 0.14, 0, 1)) : 0
+  const figureBlow = inFigure ? smoother(clamp((figureT - 0.68) / 0.16, 0, 1)) : 0
+
+  const ripple = inRift ? Math.sin(riftT * Math.PI) : 0
+  const meteorWhite = inMeteor ? smoother(clamp((meteorT - 0.7) / 0.26, 0, 1)) : 0
+  const ringsIn = inRings ? 1 - smoother(clamp(ringsT / 0.12, 0, 1)) : 0
+  const ringsOut = inRings ? smoother(clamp((ringsT - 0.8) / 0.2, 0, 1)) : 0
+  const figureIn = inFigure ? 1 - smoother(clamp(figureT / 0.1, 0, 1)) : 0
+  const white = clamp(meteorWhite * 0.15 + ringsIn + ringsOut + figureIn * 0.75, 0, 1)
+  const glitch = inFigure ? smoother(clamp((figureT - 0.78) / 0.2, 0, 1)) : 0
+  const blur = clamp(ripple * 0.95 + meteorWhite * 0.85 + ringsOut * 0.35, 0, 1)
+  const chroma = clamp(ripple + (inField && burst > 0.84 ? (burst - 0.84) / 0.16 : 0) * 0.22 + glitch * 0.45, 0, 1)
+
+  let screen: ScreenId = 'field'
+  if (inFigure) screen = 'figure'
+  else if (inRings) screen = 'rings'
+  else if (inMeteor) screen = 'meteor'
+  else if (inRift) screen = 'rift'
+
+  let mood = 0
+  if (inFigure) mood = 3
+  else if (inRings) mood = 2
+  else if (inMeteor) mood = 1
+  else if (inRift) mood = riftT
+
+  const labelOpacity =
+    inField && solid > 0.45 ? 1 : inRift ? 1 - smoother(clamp(riftT / 0.35, 0, 1)) : inMeteor && meteorT < 0.72 && meteorT > 0.04 ? 1 : 0
+
+  const cycle = inFigure ? smoother(clamp((figureT - 0.12) / 0.1, 0, 1)) * (1 - smoother(clamp((figureT - 0.78) / 0.08, 0, 1))) : 0
+
+  return {
+    screen,
+    fieldT,
+    riftT,
+    meteorT,
+    ringsT,
+    figureT,
+    burst,
+    solid,
+    dissolve,
+    meteorReveal,
+    ringsShown,
+    figureAppear,
+    figureBlow,
+    mood,
+    ripple,
+    blur,
+    glitch,
+    white,
+    flash: clamp(ringsOut + meteorWhite * 0.35, 0, 1),
+    chroma,
+    labelOpacity,
+    cycle,
+  }
+}
+
+function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, camera: PerspectiveCamera) {
+  up.set(0, 1, 0)
+  if (phase.screen === 'field' || (phase.screen === 'rift' && phase.riftT < 0.02)) {
+    const dolly = clamp(phase.fieldT / 0.42, 0, 1)
+    const boom = clamp((phase.fieldT - 0.42) / 0.58, 0, 1)
+    if (phase.fieldT < 0.42) {
+      mix3(pos, HIGH, EYE, smoother(dolly))
+      mix3(target, HIGH_TARGET, EYE_TARGET, smoother(dolly))
+    } else {
+      mix3(pos, EYE, WIDE, smoother(boom))
+      mix3(target, EYE_TARGET, WIDE_TARGET, smoother(boom))
     }
-  }
-  const field = range('field')
-  const release = range('release')
-  const lattice = range('lattice')
-  const note = range('note')
-  const releaseSpan = release.end - release.start
-  const latticeSpan = lattice.end - lattice.start
-
-  const keys: Keyframe[] = [
-    { at: field.start, pos: [-2.35, 6.05, 17.6], target: [-0.85, 1.48, 0.04] },
-    { at: field.end, pos: [-1.85, 5.75, 16.8], target: [-0.75, 1.58, 0.02] },
-    { at: release.start + releaseSpan * 0.2, pos: [-1.6, 6.15, 17.4], target: [-0.95, 1.75, 0] },
-    { at: release.start + releaseSpan * 0.55, pos: [-0.45, 7.05, 18.8], target: [-1.15, 2.25, 0] },
-    { at: release.end, pos: [0.15, 7.35, 19.6], target: [-1.2, 2.35, 0] },
-    { at: lattice.start + latticeSpan * 0.42, pos: [2.7, 2.4, 6.5], target: [0.08, 1.42, 0] },
-    { at: Math.max(lattice.end, note.start), pos: [-0.35, 2.45, 8.3], target: [0.4, 1.45, 0] },
-    { at: 1, pos: [-2.55, 1.95, 8.9], target: [0.75, 1.32, 0] },
-  ]
-
-  let cursor = 0
-  while (cursor < keys.length - 2 && (keys[cursor + 1]?.at ?? 1) < global) cursor += 1
-  const from = keys[cursor] ?? keys[0]
-  const to = keys[Math.min(cursor + 1, keys.length - 1)] ?? from
-  if (!from || !to) return
-  const span = Math.max(0.0001, to.at - from.at)
-  const blend = smoother(clamp((global - from.at) / span, 0, 1))
-  pos.set(
-    lerp(from.pos[0], to.pos[0], blend),
-    lerp(from.pos[1], to.pos[1], blend),
-    lerp(from.pos[2], to.pos[2], blend),
-  )
-  target.set(
-    lerp(from.target[0], to.target[0], blend),
-    lerp(from.target[1], to.target[1], blend),
-    lerp(from.target[2], to.target[2], blend),
-  )
-
-  if (!reducedMotion && intro < 1) {
-    const k = 1 - smoother(intro)
-    pos.x += (pos.x - target.x) * 0.14 * k
-    pos.y += (pos.y - target.y) * 0.14 * k + 0.25 * k
-    pos.z += (pos.z - target.z) * 0.14 * k
+  } else if (phase.screen === 'rift') {
+    const meteorPos: [number, number, number] = [meteorCenter.x + 1.15, meteorCenter.y + 0.35, meteorCenter.z + 8.2]
+    const meteorTarget: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
+    mix3(pos, WIDE, meteorPos, smoother(phase.riftT))
+    mix3(target, WIDE_TARGET, meteorTarget, smoother(phase.riftT))
+  } else if (phase.screen === 'meteor') {
+    const t = phase.meteorT
+    pos.set(
+      lerp(meteorCenter.x + 1.15, meteorCenter.x - 0.05, t),
+      lerp(meteorCenter.y + 0.35, meteorCenter.y + 0.02, t),
+      lerp(meteorCenter.z + 8.2, meteorCenter.z - 3.1, t),
+    )
+    target.set(meteorCenter.x, meteorCenter.y, pos.z - 1.4)
+  } else if (phase.screen === 'rings') {
+    const y = lerp(5.4, 0.16, phase.ringsT)
+    const roll = phase.ringsT * 0.62
+    pos.set(0, y, 0)
+    target.set(0, 0, 0)
+    up.set(Math.sin(roll), 0, Math.cos(roll))
+  } else {
+    const orbit = clamp(phase.figureT / 0.7, 0, 1)
+    const ang = lerp(1.15, 2.45, orbit)
+    const radius = lerp(5.15, 4.35, orbit)
+    pos.set(Math.sin(ang) * radius, lerp(1.35, 1.7, orbit) + phase.figureBlow * 0.35, Math.cos(ang) * radius)
+    target.set(0.15, 0.95, 0.05)
   }
 
-  if (!reducedMotion && (anim < 0.012 || anim > 0.992)) {
-    pos.x += Math.sin(time * 0.13) * 0.28
-    pos.y += Math.sin(time * 0.1 + 0.6) * 0.08
-  }
-
+  camera.up.copy(up)
   camera.position.copy(pos)
   camera.lookAt(target)
 }
 
+function mix3(out: Vector3, a: readonly [number, number, number], b: readonly [number, number, number], t: number) {
+  out.set(lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t))
+}
+
+function applyGrade(
+  phase: Phase,
+  bloom: BloomEffect,
+  chromatic: ChromaticAberrationEffect,
+  warp: WarpEffect,
+  aspect: number,
+) {
+  const burst = phase.screen === 'field' ? phase.burst : phase.screen === 'rift' ? 1 : 0
+  let intensity = 0.34 + burst * 0.95
+  let threshold = lerp(0.78, 0.5, burst)
+  if (phase.screen === 'field' && phase.solid < 0.35) {
+    intensity = 0.72
+    threshold = 0.62
+  }
+  if (phase.screen === 'rings') {
+    intensity = 1.25
+    threshold = 0.8
+  }
+  if (phase.screen === 'meteor') intensity = 0.55 + phase.meteorT * 0.35
+  if (phase.white > 0.4) intensity += 0.3
+  bloom.intensity = intensity
+  bloom.luminanceMaterial.threshold = threshold
+  const fringe = 0.00035 + phase.chroma * 0.012
+  chromatic.offset.set(fringe, fringe * 0.62)
+  warp.setWarp(phase.ripple, phase.blur, phase.glitch, phase.white, phase.riftT + phase.figureT, aspect)
+}
+
+function activeAnchors(phase: Phase, igloo: Igloo | null, slots: LabelAnchor[], meteor: Meteor, meteorSlots: LabelAnchor[]) {
+  if ((phase.screen === 'field' || phase.screen === 'rift') && igloo) {
+    igloo.fillLabels(slots)
+    return slots
+  }
+  if (phase.screen === 'meteor') {
+    meteor.fillLabels(meteorSlots)
+    return meteorSlots
+  }
+  return []
+}
+
 function projectLabels(
   overlay: Overlay,
-  igloo: Igloo | null,
-  slots: LabelAnchor[],
+  anchors: LabelAnchor[],
   camera: PerspectiveCamera,
   ndc: Vector3,
-  latticeT: number,
-  intro: number,
+  opacity: number,
 ) {
-  if (!igloo) return
-  igloo.fillLabels(slots)
   const width = window.innerWidth
   const height = window.innerHeight
   const scale = Math.min(1, width / 1100)
-  const fade = (1 - smoothstepRelease(latticeT, 0, 0.2)) * smoother(Math.max(intro, 0.001))
-  const views: ProjectedLabel[] = slots.map((slot) => {
+  const views: ProjectedLabel[] = anchors.map((slot) => {
     ndc.copy(slot.position).project(camera)
     const anchorX = (ndc.x * 0.5 + 0.5) * width
     const anchorY = (-ndc.y * 0.5 + 0.5) * height
-    const labelX = clamp(anchorX + slot.offsetX * scale, 18, width - 18)
-    const labelY = clamp(anchorY + slot.offsetY * scale, 18, height - 18)
+    const labelX = clamp(anchorX + slot.offsetX * scale, 24, width - 24)
+    const labelY = clamp(anchorY + slot.offsetY * scale, 24, height - 24)
     const behind = ndc.z > 1
-    const off =
-      anchorX < -180 || anchorX > width + 180 || anchorY < -180 || anchorY > height + 180
+    const off = anchorX < -200 || anchorX > width + 200 || anchorY < -200 || anchorY > height + 200
+    const visible = !behind && !off && opacity > 0.02
     return {
       anchorX,
       anchorY,
       labelX,
       labelY,
-      opacity: behind || off ? 0 : fade,
+      opacity: visible ? opacity : 0,
       text: slot.text,
-      visible: !behind && !off,
+      visible,
+      bent: slot.bent,
     }
   })
   overlay.updateLabels(views)
 }
 
 function addLights(scene: Scene, shadows: boolean) {
-  scene.add(new HemisphereLight('#d5dee6', '#6e787e', 0.62))
-  const key = new DirectionalLight('#f3f6fa', 0.78)
-  key.position.set(-7.5, 11, 8)
-  key.target.position.set(0.2, 1.2, 0)
+  scene.add(new HemisphereLight('#d7e0e6', '#6a7378', 0.58))
+  const key = new DirectionalLight('#f4f7fa', 0.72)
+  key.position.set(-7.2, 12, 8)
+  key.target.position.set(0.1, 1.2, 0)
   scene.add(key, key.target)
   if (shadows) {
     key.castShadow = true
     key.shadow.mapSize.set(1024, 1024)
     const shadow = key.shadow.camera
     shadow.near = 2
-    shadow.far = 32
-    shadow.left = -8
-    shadow.right = 8
-    shadow.top = 8
-    shadow.bottom = -8
-    key.shadow.bias = -0.00045
-    key.shadow.normalBias = 0.025
+    shadow.far = 36
+    shadow.left = -10
+    shadow.right = 10
+    shadow.top = 10
+    shadow.bottom = -10
+    key.shadow.bias = -0.0004
+    key.shadow.normalBias = 0.03
   }
-  const fill = new DirectionalLight('#e6eef6', 0.24)
-  fill.position.set(6.5, 4.5, 7)
+  const fill = new DirectionalLight('#e7eef4', 0.22)
+  fill.position.set(6.2, 4.2, 7)
   scene.add(fill)
 }
 
@@ -426,13 +576,11 @@ function createEnvironment(renderer: WebGLRenderer) {
       void main() {
         vec3 direction = normalize(vDir);
         float height = direction.y;
-        vec3 ground = vec3(0.52, 0.55, 0.58);
-        vec3 horizon = vec3(0.78, 0.81, 0.84);
-        vec3 zenith = vec3(0.6, 0.66, 0.72);
+        vec3 ground = vec3(0.55, 0.58, 0.6);
+        vec3 horizon = vec3(0.8, 0.83, 0.86);
+        vec3 zenith = vec3(0.62, 0.68, 0.74);
         vec3 color = mix(ground, horizon, smoothstep(-0.35, 0.08, height));
         color = mix(color, zenith, smoothstep(0.0, 0.65, height));
-        float sun = pow(max(dot(direction, normalize(vec3(-0.35, 0.55, 0.28))), 0.0), 14.0);
-        color += vec3(1.0) * sun * 0.4;
         gl_FragColor = vec4(color, 1.0);
       }
     `,

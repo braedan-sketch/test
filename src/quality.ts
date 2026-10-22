@@ -4,10 +4,10 @@ export type Quality = {
   snow: number
   terrainSeg: number
   blockTransmission: boolean
+  crystalTransmission: boolean
   shadows: boolean
   smaa: boolean
-  wires: number
-  arcs: number
+  points: number
   sprites: boolean
 }
 
@@ -25,12 +25,12 @@ export function detectQuality(): Quality {
       low: true,
       dprCap: 1.15,
       snow: 70,
-      terrainSeg: 56,
+      terrainSeg: 48,
       blockTransmission: false,
+      crystalTransmission: false,
       shadows: false,
       smaa: false,
-      wires: 14,
-      arcs: 5,
+      points: 6500,
       sprites: false,
     }
   }
@@ -38,13 +38,13 @@ export function detectQuality(): Quality {
   return {
     low: false,
     dprCap: 1.5,
-    snow: 360,
-    terrainSeg: 120,
+    snow: 280,
+    terrainSeg: 110,
     blockTransmission: true,
+    crystalTransmission: true,
     shadows: true,
     smaa: true,
-    wires: 32,
-    arcs: 8,
+    points: 18000,
     sprites: true,
   }
 }

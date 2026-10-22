@@ -15,47 +15,62 @@ export const brand = {
   },
   corner: {
     kicker: '////// Field note',
-    body: 'A shelter is a pause in the weather. We study the moment it lets go.',
+    body: 'A shelter is a pause in the weather. Scroll, and the courses let go.',
   },
   hero: {
     id: 'field',
     index: '01',
     label: 'Field',
     kicker: 'Cold form',
-    title: 'Held together.',
-    body: 'A structure drawn in frost. Scroll and it comes apart.',
+    title: 'Held in frost.',
+    body: 'Drawn first as wire. Then ice. Then the courses leave the centre.',
     hint: 'Scroll',
   },
-  burst: {
-    id: 'release',
+  rift: {
+    id: 'rift',
     index: '02',
-    label: 'Release',
-    kicker: 'Course by course',
-    title: 'Crown first.',
-    body: 'The top lifts. Each row beneath follows, tumbling clear of a bright core.',
+    label: 'Rift',
+    kicker: 'Between forms',
+    title: 'Through.',
+    body: 'A ripple carries the field into the next mass.',
   },
-  lattice: {
-    id: 'lattice',
+  meteor: {
+    id: 'meteor',
     index: '03',
-    label: 'Lattice',
-    kicker: 'After the shelter',
-    title: 'Open lattice.',
-    body: 'Rings, loose arcs, and one clear block. The pattern without the walls.',
+    label: 'Mass',
+    kicker: 'Loose ice',
+    title: 'One mass.',
+    body: 'A jagged crystal, lit from inside. The view goes straight through.',
   },
-  note: {
-    id: 'note',
+  rings: {
+    id: 'rings',
     index: '04',
-    label: 'Note',
-    kicker: 'Manifesto',
-    title: 'Make it feel built.',
-    body: 'Blendy is a placeholder for work that wants weight, weather, and a clean edge. Swap the name in one file. The rest of the study stays.',
-    contact: 'Start a conversation',
+    label: 'Rings',
+    kicker: 'Courses',
+    title: 'Three rings.',
+    body: 'Frosted bands turning around a white core.',
   },
-  hud: ['CRN-05', 'SLB-04', 'CRS-03', 'BLK-02', 'LNT-01', 'ENTRY'],
+  figure: {
+    id: 'figure',
+    index: '05',
+    label: 'Witness',
+    kicker: 'After image',
+    title: 'The witness.',
+    body: 'An arctic fox, held in points above a ring. Then the sand lifts.',
+    contact: 'Write to the studio',
+  },
+  hud: ['CRN', 'SLB', 'CRS', 'BLK', 'LNT', 'ENT'],
+  meteorHud: ['MASS  2.41', 'CORE  0.08', 'RIM  11.6', 'FACE  4.02'],
+  links: [
+    { label: 'Field desk', value: 'hello@blendy.studio' },
+    { label: 'Archive', value: 'North shelf' },
+    { label: 'Signal', value: '64.2 N' },
+    { label: 'Studio', value: 'Blendy' },
+  ],
   soundOn: 'Sound: On',
   soundOff: 'Sound: Off',
 } as const
 
-export type ScreenId = 'field' | 'release' | 'lattice' | 'note'
+export type ScreenId = 'field' | 'rift' | 'meteor' | 'rings' | 'figure'
 
-export const screens = [brand.hero, brand.burst, brand.lattice, brand.note] as const
+export const screens = [brand.hero, brand.rift, brand.meteor, brand.rings, brand.figure] as const

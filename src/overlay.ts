@@ -9,6 +9,7 @@ export type ProjectedLabel = {
   opacity: number
   text: string
   visible: boolean
+  bent: boolean
 }
 
 export type Overlay = {
@@ -16,10 +17,13 @@ export type Overlay = {
   setProgress: (value: number) => void
   fail: (message: string) => void
   hideLoader: () => void
+  revealChrome: () => void
+  scrambleCorner: () => void
   setActive: (id: ScreenId) => void
   setTelemetry: (course: string, camera: string) => void
   setScrollProgress: (value: number) => void
   updateLabels: (labels: ProjectedLabel[]) => void
+  setCycle: (kicker: string, value: string, opacity: number) => void
   setFlash: (amount: number) => void
   setUiDim: (amount: number) => void
   onNavigate: (handler: (id: string) => void) => void
@@ -27,6 +31,7 @@ export type Overlay = {
 }
 
 const svgNs = 'http://www.w3.org/2000/svg'
+const labelSlots = Math.max(brand.hud.length, brand.meteorHud.length)
 
 export function mountOverlay(): Overlay {
   const loader = document.querySelector('#loader')
@@ -59,22 +64,26 @@ export function mountOverlay(): Overlay {
     <header>
       <div class="brand-block">
         <p class="wordmark" data-text="${brand.name}">${brand.name}</p>
-        <p class="legal">© ${brand.year} ${brand.legal}<br />${brand.study}</p>
+        <p class="legal" data-text="© ${brand.year} ${brand.legal} ${brand.study}">© ${brand.year} ${brand.legal}<br />${brand.study}</p>
       </div>
       <div class="corner">
-        <p class="kicker">${brand.corner.kicker}</p>
-        <p>${brand.corner.body}</p>
+        <p class="kicker" data-text="${brand.corner.kicker}">${brand.corner.kicker}</p>
+        <p class="corner-body" data-text="${brand.corner.body}">${brand.corner.body}</p>
       </div>
     </header>
     <nav class="rail" aria-label="Sections"></nav>
-    <button type="button" class="sound" aria-pressed="false">${brand.soundOff}</button>
+    <button type="button" class="sound" data-text="${brand.soundOff}" aria-pressed="false">${brand.soundOff}</button>
     <div class="telemetry" aria-hidden="true">
       <span>// Live</span>
-      <strong data-course>HOLD</strong>
+      <strong data-course>WIRE</strong>
       <span data-cam>0.00  0.00  0.00</span>
     </div>
     <svg class="leaders" aria-hidden="true"></svg>
     <div class="tags"></div>
+    <div class="cycle">
+      <p class="cycle-kicker" data-text=""></p>
+      <a class="cycle-link" data-text="" href="mailto:${brand.email}"></a>
+    </div>
     <div class="flash" aria-hidden="true"></div>
   `
 
@@ -86,6 +95,9 @@ export function mountOverlay(): Overlay {
   const leaders = ui.querySelector('.leaders')
   const tags = ui.querySelector('.tags')
   const flash = ui.querySelector('.flash')
+  const cycle = ui.querySelector('.cycle')
+  const cycleKicker = ui.querySelector('.cycle-kicker')
+  const cycleLink = ui.querySelector('.cycle-link')
   if (
     !(rail instanceof HTMLElement) ||
     !(progress instanceof HTMLElement) ||
@@ -94,7 +106,10 @@ export function mountOverlay(): Overlay {
     !(cam instanceof HTMLElement) ||
     !(leaders instanceof SVGSVGElement) ||
     !(tags instanceof HTMLElement) ||
-    !(flash instanceof HTMLElement)
+    !(flash instanceof HTMLElement) ||
+    !(cycle instanceof HTMLElement) ||
+    !(cycleKicker instanceof HTMLElement) ||
+    !(cycleLink instanceof HTMLElement)
   ) {
     throw new Error('Missing overlay nodes')
   }
@@ -106,16 +121,16 @@ export function mountOverlay(): Overlay {
     el.className = 'stage'
     el.dataset.screen = section.id
     const contact =
-      section.id === 'note'
-        ? `<a class="contact" href="mailto:${brand.email}">${brand.note.contact}<span>${brand.email}</span></a>`
+      section.id === 'figure'
+        ? `<a class="contact" href="mailto:${brand.email}"><span data-text="${brand.figure.contact}">${brand.figure.contact}</span><span data-text="${brand.email}">${brand.email}</span></a>`
         : ''
-    const hint = section.id === 'field' ? `<p class="hint">${brand.hero.hint}</p>` : ''
+    const hint = section.id === 'field' ? `<p class="hint" data-text="${brand.hero.hint}">${brand.hero.hint}</p>` : ''
     el.innerHTML = `
       <div class="sticky">
         <div class="copy">
-          <p class="kicker">${section.kicker}</p>
+          <p class="kicker" data-text="${section.kicker}">${section.kicker}</p>
           <h2 class="title" data-text="${section.title}">${section.title}</h2>
-          <p class="body">${section.body}</p>
+          <p class="body" data-text="${section.body}">${section.body}</p>
           ${contact}
           ${hint}
         </div>
@@ -127,21 +142,20 @@ export function mountOverlay(): Overlay {
     const button = document.createElement('button')
     button.type = 'button'
     button.dataset.screen = section.id
-    button.innerHTML = `<span>${section.index}</span><em>${section.label}</em>`
+    button.innerHTML = `<span>${section.index}</span><em data-text="${section.label}">${section.label}</em>`
     rail.append(button)
   }
 
   const tagNodes: HTMLElement[] = []
-  const lineNodes: SVGLineElement[] = []
+  const lineNodes: SVGPolylineElement[] = []
   const dotNodes: SVGCircleElement[] = []
-  for (let i = 0; i < brand.hud.length; i += 1) {
+  for (let i = 0; i < labelSlots; i += 1) {
     const tag = document.createElement('div')
     tag.className = 'tag'
-    tag.textContent = brand.hud[i] ?? ''
     tags.append(tag)
     tagNodes.push(tag)
 
-    const line = document.createElementNS(svgNs, 'line')
+    const line = document.createElementNS(svgNs, 'polyline')
     const dot = document.createElementNS(svgNs, 'circle')
     dot.setAttribute('r', '2.2')
     leaders.append(line, dot)
@@ -152,6 +166,8 @@ export function mountOverlay(): Overlay {
   let navigate: (id: string) => void = () => {}
   let toggleSound: () => boolean = () => false
   let active: ScreenId | '' = ''
+  let cycleKey = ''
+  let courseKey = ''
 
   rail.addEventListener('click', (event) => {
     const button = (event.target as HTMLElement).closest('button')
@@ -161,9 +177,17 @@ export function mountOverlay(): Overlay {
 
   sound.addEventListener('click', () => {
     const on = toggleSound()
-    sound.textContent = on ? brand.soundOn : brand.soundOff
+    const label = on ? brand.soundOn : brand.soundOff
+    sound.dataset.text = label
+    sound.textContent = label
     sound.setAttribute('aria-pressed', on ? 'true' : 'false')
   })
+
+  const scrambleIn = (root: ParentNode, selector: string) => {
+    root.querySelectorAll(selector).forEach((node) => {
+      if (node instanceof HTMLElement) scramble(node)
+    })
+  }
 
   return {
     sections,
@@ -181,22 +205,48 @@ export function mountOverlay(): Overlay {
       loader.setAttribute('aria-busy', 'false')
       document.body.classList.remove('is-loading')
     },
+    revealChrome() {
+      scrambleIn(ui, '.wordmark, .corner .kicker, .corner-body, .sound')
+      scrambleIn(rail, 'em')
+      const title = sections.field.querySelector('h2')
+      const kicker = sections.field.querySelector('.kicker')
+      const body = sections.field.querySelector('.body')
+      if (title instanceof HTMLElement) scramble(title)
+      if (kicker instanceof HTMLElement) scramble(kicker)
+      if (body instanceof HTMLElement) scramble(body)
+    },
+    scrambleCorner() {
+      const kicker = ui.querySelector('.corner .kicker')
+      const body = ui.querySelector('.corner-body')
+      if (kicker instanceof HTMLElement) scramble(kicker)
+      if (body instanceof HTMLElement) scramble(body)
+    },
     setActive(id) {
       if (id === active) return
       active = id
       document.body.dataset.screen = id
       for (const button of rail.querySelectorAll('button')) {
-        button.classList.toggle('is-active', button.dataset.screen === id)
+        const on = button.dataset.screen === id
+        button.classList.toggle('is-active', on)
+        if (on) {
+          const em = button.querySelector('em')
+          if (em instanceof HTMLElement) scramble(em)
+        }
       }
-      const title = sections[id].querySelector('h2')
+      const section = sections[id]
+      const title = section.querySelector('h2')
+      const kicker = section.querySelector('.kicker')
+      const body = section.querySelector('.body')
       if (title instanceof HTMLElement) scramble(title)
-      if (id === 'field') {
-        const word = ui.querySelector('.wordmark')
-        if (word instanceof HTMLElement) scramble(word)
-      }
+      if (kicker instanceof HTMLElement) scramble(kicker)
+      if (body instanceof HTMLElement) scramble(body)
     },
     setTelemetry(courseText, cameraText) {
-      course.textContent = courseText
+      if (courseText !== courseKey) {
+        courseKey = courseText
+        course.dataset.text = courseText
+        scramble(course)
+      }
       cam.textContent = cameraText
     },
     setScrollProgress(value) {
@@ -211,21 +261,44 @@ export function mountOverlay(): Overlay {
         if (!tag || !line || !dot) continue
         if (!label || !label.visible || label.opacity <= 0.02) {
           tag.style.opacity = '0'
+          tag.dataset.on = '0'
           line.style.opacity = '0'
           dot.style.opacity = '0'
           continue
         }
-        tag.textContent = label.text
+        if (tag.dataset.on !== '1') {
+          tag.dataset.on = '1'
+          tag.dataset.text = label.text
+          scramble(tag)
+        } else if (!tag.classList.contains('is-glitching')) {
+          tag.textContent = label.text
+        }
         tag.style.opacity = label.opacity.toFixed(3)
         tag.style.transform = `translate(${label.labelX}px, ${label.labelY}px) translate(-50%, -50%)`
         line.style.opacity = String(label.opacity * 0.9)
         dot.style.opacity = String(label.opacity)
-        line.setAttribute('x1', label.anchorX.toFixed(1))
-        line.setAttribute('y1', label.anchorY.toFixed(1))
-        line.setAttribute('x2', label.labelX.toFixed(1))
-        line.setAttribute('y2', label.labelY.toFixed(1))
+        const elbow = label.bent ? `${label.labelX.toFixed(1)},${label.anchorY.toFixed(1)} ` : ''
+        line.setAttribute(
+          'points',
+          `${label.anchorX.toFixed(1)},${label.anchorY.toFixed(1)} ${elbow}${label.labelX.toFixed(1)},${label.labelY.toFixed(1)}`,
+        )
         dot.setAttribute('cx', label.anchorX.toFixed(1))
         dot.setAttribute('cy', label.anchorY.toFixed(1))
+      }
+    },
+    setCycle(kicker, value, opacity) {
+      cycle.style.opacity = String(Math.max(0, Math.min(1, opacity)))
+      const key = `${kicker}|${value}`
+      if (key === cycleKey) return
+      cycleKey = key
+      cycleKicker.dataset.text = kicker
+      cycleLink.dataset.text = value
+      if (opacity > 0.2) {
+        scramble(cycleKicker)
+        scramble(cycleLink)
+      } else {
+        cycleKicker.textContent = kicker
+        cycleLink.textContent = value
       }
     },
     setFlash(amount) {
