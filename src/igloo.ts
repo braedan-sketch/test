@@ -2,12 +2,18 @@ import {
   AdditiveBlending,
   Box3,
   BufferAttribute,
+  BufferGeometry,
   CanvasTexture,
+  Float32BufferAttribute,
   Group,
+  LineBasicMaterial,
+  LineSegments,
   Mesh,
   MeshBasicMaterial,
   PlaneGeometry,
   PointLight,
+  Points,
+  PointsMaterial,
   Quaternion,
   ShaderMaterial,
   SphereGeometry,
@@ -87,6 +93,50 @@ function radialTexture(inner: string, outer: string) {
   return texture
 }
 
+function buildGuides(center: Vector3) {
+  const root = new Group()
+  const positions: number[] = []
+  const y = 0.02
+  for (let i = 0; i < 5; i += 1) {
+    const a = (i / 5) * Math.PI * 2 + 0.4
+    const x = Math.cos(a) * 4.2
+    const z = Math.sin(a) * 3.6
+    positions.push(center.x, y, center.z, center.x + x, y, center.z + z)
+  }
+  const lines = new LineSegments(
+    new BufferGeometry().setAttribute('position', new Float32BufferAttribute(positions, 3)),
+    new LineBasicMaterial({
+      color: '#eef3f6',
+      transparent: true,
+      opacity: 0.42,
+      fog: false,
+      toneMapped: false,
+    }),
+  )
+  const dots = new Float32Array(18 * 3)
+  for (let i = 0; i < 18; i += 1) {
+    const a = (i / 18) * Math.PI * 2
+    const rad = 2.4 + (i % 3) * 0.7
+    dots[i * 3] = center.x + Math.cos(a) * rad
+    dots[i * 3 + 1] = y + 0.04
+    dots[i * 3 + 2] = center.z + Math.sin(a) * rad * 0.86
+  }
+  const points = new Points(
+    new BufferGeometry().setAttribute('position', new Float32BufferAttribute(dots, 3)),
+    new PointsMaterial({
+      color: '#f4f7f8',
+      size: 2.2,
+      sizeAttenuation: false,
+      transparent: true,
+      opacity: 0.7,
+      fog: false,
+      toneMapped: false,
+    }),
+  )
+  root.add(lines, points)
+  return root
+}
+
 function asMesh(object: Object3D): object is Mesh {
   return (object as Mesh).isMesh === true
 }
@@ -94,6 +144,8 @@ function asMesh(object: Object3D): object is Mesh {
 function wireMaterial(solid: { value: number }, dissolve: { value: number }) {
   const material = new ShaderMaterial({
     toneMapped: false,
+    transparent: true,
+    depthWrite: false,
     fog: false,
     polygonOffset: true,
     polygonOffsetFactor: -2,
@@ -128,13 +180,12 @@ function wireMaterial(solid: { value: number }, dissolve: { value: number }) {
         }
         vec3 face = normalize(cross(dFdx(vWPos), dFdy(vWPos)));
         float crease = length(fwidth(face));
-        float seam = smoothstep(0.015, 0.22, crease * 9.0);
         float grazing = abs(dot(normalize(vN), normalize(vV)));
-        float silhouette = smoothstep(0.42, 0.04, grazing);
+        float seam = smoothstep(0.06, 0.28, crease);
+        float silhouette = smoothstep(0.05, 0.012, grazing);
         float line = max(seam, silhouette);
-        if (line < 0.16) discard;
-        float glow = 0.85 + line * 0.7;
-        gl_FragColor = vec4(vec3(0.9, 0.95, 1.0) * glow, 1.0);
+        if (line < 0.25) discard;
+        gl_FragColor = vec4(0.94, 0.96, 0.98, line * 0.55);
       }
     `,
   })
@@ -262,6 +313,9 @@ export async function loadIgloo(
   contact.renderOrder = 2
   group.add(contact)
 
+  const guides = buildGuides(core)
+  group.add(guides)
+
   const coreMat = new ShaderMaterial({
     transparent: true,
     depthWrite: false,
@@ -339,6 +393,7 @@ export async function loadIgloo(
       group.visible = dissolve < 0.985
       const showWire = solid < 0.992 && dissolve < 0.98
       for (const wire of wireMeshes) wire.visible = showWire
+      guides.visible = solid < 0.45 && dissolve < 0.2
 
       const glow = burst * burst * (1 - smoother(dissolve))
       coreMat.uniforms.uGlow.value = glow * 0.72

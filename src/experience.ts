@@ -51,16 +51,23 @@ declare global {
     __blendy?: {
       scrollTo: (y: number) => void
       scrollProgress: (progress: number) => void
+      debug?: () => Record<string, unknown>
     }
   }
 }
 
-const HIGH: readonly [number, number, number] = [0.05, 11.4, 4.6]
-const HIGH_TARGET: readonly [number, number, number] = [0.0, 0.35, 0.25]
-const EYE: readonly [number, number, number] = [1.05, 2.05, 9.15]
-const EYE_TARGET: readonly [number, number, number] = [0.0, 1.2, 0.05]
-const WIDE: readonly [number, number, number] = [1.35, 2.55, 10.15]
-const WIDE_TARGET: readonly [number, number, number] = [0.0, 1.35, 0.0]
+// Dome center after the group yaw and the ground lift. Overhead shot uses the footprint.
+const DOME_TARGET: readonly [number, number, number] = [0.05, 2.15, 0.12]
+const DOME_DIR: readonly [number, number, number] = [0.1, 1, 0.26]
+// Eye-level center of the stone dome, camera in front and slightly above.
+const EYE_TARGET: readonly [number, number, number] = [0.28, 1.7, 0.48]
+const EYE_DIR: readonly [number, number, number] = [0.55, 0.28, 2.4]
+const CRYSTAL_DIR: readonly [number, number, number] = [0.22, 0.04, 1]
+// Seated fox: hips on the ring, head near y 1.3, tail off to +X.
+const FOX_TARGET: readonly [number, number, number] = [0.04, 0.82, 0.12]
+const FOX_DIR: readonly [number, number, number] = [0.32, 0.08, 1.2]
+const scratchA = new Vector3()
+const scratchB = new Vector3()
 
 export async function startExperience(overlay: Overlay) {
   const canvas = document.querySelector('#view')
@@ -88,7 +95,7 @@ export async function startExperience(overlay: Overlay) {
   }
 
   const scene = new Scene()
-  const camera = new PerspectiveCamera(36, 1, 0.05, 220)
+  const camera = new PerspectiveCamera(40, 1, 0.08, 280)
   const world = createWorld(scene, quality)
   scene.environment = createEnvironment(renderer)
   scene.environmentIntensity = 0.36
@@ -179,6 +186,26 @@ export async function startExperience(overlay: Overlay) {
 
   const pos = new Vector3()
   const target = new Vector3()
+  if (window.__blendy) {
+    const probe = new Vector3()
+    window.__blendy.debug = () => {
+      const project = (x: number, y: number, z: number) => {
+        probe.set(x, y, z).project(camera)
+        return [Math.round(probe.x * 1000) / 1000, Math.round(probe.y * 1000) / 1000]
+      }
+      return {
+        pos: [camera.position.x, camera.position.y, camera.position.z],
+        fov: camera.fov,
+        aspect: camera.aspect,
+        origin: project(0, 1.6, 0),
+        core: project(0.3, 1.8, 0.55),
+        plusX: project(2, 1.8, 0.55),
+        minusX: project(-2, 1.8, 0.55),
+        plusZ: project(0.3, 1.8, 2.5),
+        minusZ: project(0.3, 1.8, -1.5),
+      }
+    }
+  }
   const up = new Vector3(0, 1, 0)
   const ndc = new Vector3()
   const clear = new Color('#c5c8cc')
@@ -417,46 +444,86 @@ function readPhase(global: number, marks: Marks): Phase {
 
 function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, camera: PerspectiveCamera) {
   up.set(0, 1, 0)
+  const aspect = Math.max(0.2, camera.aspect)
+  let fov = 40
   if (phase.screen === 'field' || (phase.screen === 'rift' && phase.riftT < 0.02)) {
-    const dolly = clamp(phase.fieldT / 0.4, 0, 1)
-    const boom = clamp((phase.fieldT - 0.4) / 0.6, 0, 1)
-    if (phase.fieldT < 0.4) {
-      mix3(pos, HIGH, EYE, smoother(dolly))
-      mix3(target, HIGH_TARGET, EYE_TARGET, smoother(dolly))
-    } else {
-      mix3(pos, EYE, WIDE, smoother(boom))
-      mix3(target, EYE_TARGET, WIDE_TARGET, smoother(boom))
-    }
+    fov = 40
+    const dolly = smoother(clamp(phase.fieldT / 0.42, 0, 1))
+    mix3(target, DOME_TARGET, EYE_TARGET, dolly)
+    // Looking down the Y axis: world up is parallel to the view, which throws the dome into a corner.
+    up.set(0, dolly, -(1 - dolly))
+    if (up.lengthSq() < 1e-6) up.set(0, 1, 0)
+    else up.normalize()
+    // Overhead dome is the ~5.1 footprint. fillH stays loose so width (35%) wins on both aspects.
+    const dHigh = fitBox(5.15, 4.55, 0.34, 0.72, aspect, fov)
+    // Box grows with the drift so the solid dome and the opened dome both land near 75% width.
+    const span = phase.burst
+    const dEye = fitBox(lerp(4.15, 5.35, span), lerp(3.55, 4.15, span), 0.75, 0.58, aspect, fov)
+    placeAlong(scratchA, DOME_TARGET, DOME_DIR, dHigh)
+    placeAlong(scratchB, EYE_TARGET, EYE_DIR, dEye)
+    pos.copy(scratchA).lerp(scratchB, dolly)
   } else if (phase.screen === 'rift') {
-    const meteorPos: [number, number, number] = [meteorCenter.x + 0.55, meteorCenter.y + 0.15, meteorCenter.z + 4.8]
-    const meteorTarget: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
-    mix3(pos, WIDE, meteorPos, smoother(phase.riftT))
-    mix3(target, WIDE_TARGET, meteorTarget, smoother(phase.riftT))
+    fov = 36
+    const crystalTarget: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
+    placeAlong(scratchA, EYE_TARGET, EYE_DIR, fitBox(5.35, 4.15, 0.75, 0.58, aspect, 40))
+    placeAlong(scratchB, crystalTarget, CRYSTAL_DIR, fitBox(1.9, 2.55, 0.61, 0.58, aspect, fov))
+    mix3(target, EYE_TARGET, crystalTarget, smoother(phase.riftT))
+    pos.copy(scratchA).lerp(scratchB, smoother(phase.riftT))
   } else if (phase.screen === 'meteor') {
-    const t = phase.meteorT
-    pos.set(
-      lerp(meteorCenter.x + 0.55, meteorCenter.x + 0.05, t),
-      lerp(meteorCenter.y + 0.15, meteorCenter.y, t),
-      lerp(meteorCenter.z + 4.8, meteorCenter.z - 1.35, t),
-    )
-    target.set(meteorCenter.x, meteorCenter.y, pos.z - 0.85)
+    fov = 34
+    const hold = fitBox(1.9, 2.55, 0.61, 0.58, aspect, fov)
+    const push = smoother(clamp((phase.meteorT - 0.62) / 0.38, 0, 1))
+    const dist = lerp(hold, -0.35, push)
+    target.set(meteorCenter.x, meteorCenter.y, meteorCenter.z)
+    placeAlong(pos, [target.x, target.y, target.z], CRYSTAL_DIR, Math.max(0.35, dist))
+    if (push > 0.2) {
+      pos.set(meteorCenter.x + 0.04, meteorCenter.y, meteorCenter.z + lerp(hold, -1.1, push))
+      target.set(meteorCenter.x, meteorCenter.y, pos.z - 0.8)
+    }
   } else if (phase.screen === 'rings') {
-    const y = lerp(8.4, 2.35, smoother(phase.ringsT))
-    const roll = phase.ringsT * 0.72
+    fov = 36
+    const far = fitBox(4.6, 4.6, 0.72, 0.62, aspect, fov)
+    const near = fitBox(4.6, 4.6, 1.15, 0.92, aspect, fov)
+    const y = lerp(far, near, smoother(phase.ringsT))
+    const roll = phase.ringsT * 0.55
     pos.set(0, y, 0)
     target.set(0, 0, 0)
     up.set(Math.sin(roll), 0, Math.cos(roll))
   } else {
+    fov = 34
     const orbit = clamp(phase.figureT / 0.7, 0, 1)
-    const ang = lerp(1.05, 1.85, orbit)
-    const radius = lerp(4.15, 3.55, orbit)
-    pos.set(Math.sin(ang) * radius, lerp(1.05, 1.28, orbit) + phase.figureBlow * 0.2, Math.cos(ang) * radius)
-    target.set(0.02, 0.72, 0.05)
+    // Seated fox is ~1.55 wide and ~1.82 tall. 70% of portrait width, height-capped on desktop.
+    const dist = fitBox(1.02, 1.72, 0.68, 0.54, aspect, fov)
+    const yaw = lerp(-0.08, 0.22, orbit)
+    const dir: [number, number, number] = [
+      FOX_DIR[0] * Math.cos(yaw) - FOX_DIR[2] * Math.sin(yaw),
+      FOX_DIR[1] + orbit * 0.04,
+      FOX_DIR[0] * Math.sin(yaw) + FOX_DIR[2] * Math.cos(yaw),
+    ]
+    target.set(FOX_TARGET[0], FOX_TARGET[1], FOX_TARGET[2])
+    placeAlong(pos, FOX_TARGET, dir, dist + phase.figureBlow * 0.35)
   }
 
+  if (Math.abs(camera.fov - fov) > 0.01) {
+    camera.fov = fov
+    camera.updateProjectionMatrix()
+  }
   camera.up.copy(up)
   camera.position.copy(pos)
   camera.lookAt(target)
+}
+
+function fitBox(width: number, height: number, fillW: number, fillH: number, aspect: number, fovDeg: number) {
+  const vHalf = (fovDeg * Math.PI) / 360
+  const hHalf = Math.atan(Math.tan(vHalf) * aspect)
+  const distH = height / (2 * Math.tan(vHalf) * fillH)
+  const distW = width / (2 * Math.tan(hHalf) * fillW)
+  return Math.max(distH, distW)
+}
+
+function placeAlong(out: Vector3, target: readonly [number, number, number], dir: readonly [number, number, number], distance: number) {
+  const len = Math.hypot(dir[0], dir[1], dir[2]) || 1
+  out.set(target[0] + (dir[0] / len) * distance, target[1] + (dir[1] / len) * distance, target[2] + (dir[2] / len) * distance)
 }
 
 function mix3(out: Vector3, a: readonly [number, number, number], b: readonly [number, number, number], t: number) {
@@ -474,8 +541,8 @@ function applyGrade(
   let intensity = 0.36 + burst * 0.2
   let threshold = 0.84
   if (phase.screen === 'field' && phase.solid < 0.55) {
-    intensity = 0.58
-    threshold = 0.66
+    intensity = 0.08
+    threshold = 0.96
   }
   if (phase.screen === 'rings') {
     intensity = 0.55

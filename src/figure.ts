@@ -28,11 +28,12 @@ export function createFigure(quality: Quality): Figure {
   const count = quality.points
   const rand = mulberry(11)
   const surf = buildFox()
-  const { positions, seeds } = sampleSurface(surf, count, rand)
+  const { positions, seeds, shades } = sampleSurface(surf, count, rand)
 
   const geometry = new BufferGeometry()
   geometry.setAttribute('position', new Float32BufferAttribute(positions, 3))
   geometry.setAttribute('aSeed', new Float32BufferAttribute(seeds, 1))
+  geometry.setAttribute('aShade', new Float32BufferAttribute(shades, 1))
 
   const material = new ShaderMaterial({
     transparent: true,
@@ -47,14 +48,17 @@ export function createFigure(quality: Quality): Figure {
     },
     vertexShader: /* glsl */ `
       attribute float aSeed;
+      attribute float aShade;
       uniform float uTime;
       uniform float uBlow;
       uniform float uAppear;
       uniform float uPixel;
       varying float vSeed;
+      varying float vShade;
       varying float vAlpha;
       void main() {
         vSeed = aSeed;
+        vShade = aShade;
         float gate = smoothstep(aSeed * 0.55, aSeed * 0.55 + 0.28, uAppear);
         vec3 p = position;
         float s = sin(uTime * 1.35 + aSeed * 40.0);
@@ -68,20 +72,21 @@ export function createFigure(quality: Quality): Figure {
         p.z += lift * (fract(aSeed * 13.7) - 0.5) * 0.55;
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
         gl_Position = projectionMatrix * mv;
-        gl_PointSize = clamp((0.45 + aSeed * 0.55) * uPixel * (46.0 / max(1.0, -mv.z)), 0.65, 2.15);
+        gl_PointSize = clamp((0.28 + aSeed * 0.32) * uPixel * (26.0 / max(1.0, -mv.z)), 0.45, 1.35);
         vAlpha = gate * (1.0 - smoothstep(0.35, 0.96, uBlow)) * (0.78 + 0.22 * (0.5 + 0.5 * s));
       }
     `,
     fragmentShader: /* glsl */ `
       varying float vSeed;
+      varying float vShade;
       varying float vAlpha;
       void main() {
         vec2 d = gl_PointCoord - vec2(0.5);
         float r = length(d);
         if (r > 0.5) discard;
-        float falloff = smoothstep(0.5, 0.12, r);
-        vec3 color = mix(vec3(0.86, 0.91, 0.95), vec3(1.0), falloff);
-        gl_FragColor = vec4(color, falloff * vAlpha * 0.72);
+        float falloff = smoothstep(0.5, 0.08, r);
+        vec3 color = mix(vec3(0.20, 0.23, 0.26), vec3(0.96, 0.98, 1.0), vShade);
+        gl_FragColor = vec4(color, falloff * vAlpha * 0.9);
       }
     `,
   })
@@ -89,17 +94,17 @@ export function createFigure(quality: Quality): Figure {
   const points = new Points(geometry, material)
   const root = new Group()
   root.add(points)
-  root.rotation.y = -0.35
-  root.scale.setScalar(1.22)
+  root.rotation.y = 0.28
+  root.scale.setScalar(1)
 
   const disc = new Mesh(
-    new TorusGeometry(0.95, 0.018, 10, 80),
+    new TorusGeometry(0.58, 0.009, 10, 96),
     new MeshBasicMaterial({ color: '#f7fbff', toneMapped: false }),
   )
   disc.rotation.x = Math.PI / 2
   disc.position.y = 0.015
   const inner = new Mesh(
-    new TorusGeometry(0.62, 0.01, 8, 64),
+    new TorusGeometry(0.38, 0.005, 8, 80),
     new MeshBasicMaterial({
       color: '#ffffff',
       transparent: true,
@@ -111,7 +116,7 @@ export function createFigure(quality: Quality): Figure {
   inner.rotation.x = Math.PI / 2
   inner.position.y = 0.02
   const glow = new Mesh(
-    new TorusGeometry(0.95, 0.08, 8, 64),
+    new TorusGeometry(0.58, 0.02, 8, 80),
     new MeshBasicMaterial({
       color: '#d5e6f0',
       transparent: true,
@@ -143,40 +148,36 @@ export function createFigure(quality: Quality): Figure {
 
 function buildFox(): Surf {
   const surf: Surf = { pos: [], idx: [] }
-  const segs = 12
+  const segs = 14
+  // Wide seated bust: the chest and skull carry the silhouette, the tail stays inside it.
   loft(surf, [
-    ring(-0.48, 0.5, 0.13, 0.11, 0.14, segs),
-    ring(-0.22, 0.5, 0.145, 0.12, 0.15, segs),
-    ring(0.05, 0.5, 0.13, 0.11, 0.14, segs),
-    ring(0.28, 0.52, 0.14, 0.12, 0.15, segs),
-    ring(0.44, 0.58, 0.09, 0.09, 0.1, segs),
-    ring(0.54, 0.7, 0.06, 0.065, 0.07, segs),
-    ring(0.66, 0.82, 0.11, 0.095, 0.1, segs),
-    ring(0.82, 0.8, 0.085, 0.075, 0.08, segs),
-    ring(1.02, 0.75, 0.038, 0.032, 0.034, segs),
-    ring(1.22, 0.72, 0.012, 0.01, 0.011, segs),
+    ring(-0.08, 0.36, 0.52, 0.24, 0.22, segs),
+    ring(0.1, 0.55, 0.48, 0.32, 0.22, segs),
+    ring(0.18, 0.82, 0.4, 0.3, 0.18, segs),
+    ring(0.14, 1.02, 0.2, 0.16, 0.14, segs),
+    ring(0.08, 1.26, 0.44, 0.34, 0.28, segs),
+    ring(0.36, 1.16, 0.16, 0.11, 0.1, segs),
+    ring(0.5, 1.1, 0.05, 0.04, 0.032, segs),
   ])
   loft(surf, [
-    ring(-0.55, 0.55, 0.08, 0.08, 0.09, 8),
-    ring(-0.78, 0.78, 0.11, 0.1, 0.12, 8),
-    ring(-0.9, 1.08, 0.09, 0.085, 0.1, 8),
-    ring(-0.7, 1.32, 0.05, 0.045, 0.055, 8),
-    ring(-0.48, 1.46, 0.015, 0.012, 0.014, 8),
+    ring(0.0, 0.46, 0.12, 0.1, 0.11, 8, 0.32),
+    ring(0.08, 0.7, 0.1, 0.09, 0.1, 8, 0.5),
+    ring(0.16, 0.92, 0.06, 0.05, 0.05, 8, 0.4),
   ])
-  leg(surf, -1, 0.32)
-  leg(surf, 1, 0.32)
-  leg(surf, -1, -0.22)
-  leg(surf, 1, -0.22)
-  ear(surf, -0.07, 0.66)
-  ear(surf, 0.07, 0.66)
+  leg(surf, -0.22, 0.08)
+  leg(surf, 0.2, 0.1)
+  leg(surf, -0.16, -0.12)
+  leg(surf, 0.16, -0.1)
+  ear(surf, -0.2, 0.06)
+  ear(surf, 0.2, 0.08)
   return surf
 }
 
-function ring(z: number, cy: number, rx: number, ryTop: number, ryBot: number, segs: number) {
+function ring(z: number, cy: number, rx: number, ryTop: number, ryBot: number, segs: number, cx = 0) {
   const pts: number[][] = []
   for (let i = 0; i < segs; i += 1) {
     const a = (i / segs) * Math.PI * 2
-    const x = Math.cos(a) * rx
+    const x = cx + Math.cos(a) * rx
     const s = Math.sin(a)
     const y = cy + (s >= 0 ? s * ryTop : s * ryBot)
     pts.push([x, y, z])
@@ -203,38 +204,28 @@ function loft(surf: Surf, rings: number[][][]) {
   }
 }
 
-function leg(surf: Surf, side: number, z: number) {
-  const x = 0.1 * side
+function leg(surf: Surf, x: number, z: number) {
   const segs = 7
   loft(surf, [
-    ring(z, 0.4, 0.045, 0.045, 0.045, segs).map((p) => [p[0] + x, p[1], p[2]]),
-    ring(z + 0.02 * side, 0.2, 0.032, 0.034, 0.034, segs).map((p) => [p[0] + x, p[1], p[2]]),
-    ring(z + 0.05, 0.045, 0.04, 0.028, 0.03, segs).map((p) => [p[0] + x, p[1], p[2]]),
+    ring(z, 0.42, 0.055, 0.05, 0.05, segs, x),
+    ring(z + 0.04, 0.2, 0.04, 0.04, 0.04, segs, x),
+    ring(z + 0.06, 0.04, 0.05, 0.03, 0.03, segs, x),
   ])
 }
 
 function ear(surf: Surf, x: number, z: number) {
-  const base = surf.pos.length / 3
-  const y = 0.9
   const s = x < 0 ? -1 : 1
-  surf.pos.push(
-    x - 0.035 * s, y, z - 0.03,
-    x + 0.02 * s, y, z - 0.02,
-    x + 0.015 * s, y, z + 0.045,
-    x - 0.03 * s, y, z + 0.035,
-    x + 0.01 * s, y + 0.55, z - 0.02,
-  )
-  surf.idx.push(
-    base, base + 1, base + 4,
-    base + 1, base + 2, base + 4,
-    base + 2, base + 3, base + 4,
-    base + 3, base, base + 4,
-  )
+  loft(surf, [
+    ring(z, 1.4, 0.06, 0.045, 0.05, 6, x),
+    ring(z - 0.02, 1.56, 0.04, 0.07, 0.03, 6, x + 0.035 * s),
+    ring(z - 0.02, 1.7, 0.014, 0.022, 0.012, 6, x + 0.05 * s),
+  ])
 }
 
 function sampleSurface(surf: Surf, count: number, rand: () => number) {
   const positions = new Float32Array(count * 3)
   const seeds = new Float32Array(count)
+  const shades = new Float32Array(count)
   const { pos, idx } = surf
   const areas: number[] = []
   let total = 0
@@ -301,16 +292,18 @@ function sampleSurface(surf: Surf, count: number, rand: () => number) {
     let ny = abz * acx - abx * acz
     let nz = abx * acy - aby * acx
     const nl = Math.hypot(nx, ny, nz) || 1
-    const thick = (rand() - 0.5) * 0.02
-    x += (nx / nl) * thick
-    y += (ny / nl) * thick
-    z += (nz / nl) * thick
+    const thick = rand() * 0.045
+    x -= (nx / nl) * thick
+    y -= (ny / nl) * thick
+    z -= (nz / nl) * thick
+    const light = Math.max(0, (nx / nl) * -0.25 + (ny / nl) * 0.82 + (nz / nl) * 0.45)
     positions[n * 3] = x
     positions[n * 3 + 1] = y
     positions[n * 3 + 2] = z
     seeds[n] = rand()
+    shades[n] = 0.08 + light * 0.92
   }
-  return { positions, seeds }
+  return { positions, seeds, shades }
 }
 
 function mulberry(seed: number) {

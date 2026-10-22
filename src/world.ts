@@ -78,14 +78,33 @@ export function createWorld(scene: Scene, quality: Quality): World {
     position.setY(i, sampleHeight(x, z))
   }
   geometry.computeVertexNormals()
-  const terrain = new Mesh(
-    geometry,
-    new MeshStandardMaterial({
-      color: '#858c92',
-      roughness: 0.96,
-      metalness: 0,
-    }),
-  )
+  const terrainMat = new MeshStandardMaterial({
+    color: '#9aa3a8',
+    roughness: 0.96,
+    metalness: 0,
+  })
+  terrainMat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vRock;')
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        vRock = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
+      )
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vRock;')
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        float rock = sin(vRock.x * 0.17) * cos(vRock.z * 0.13);
+        float snow = smoothstep(-0.2, 1.4, vRock.y + rock * 0.35);
+        diffuseColor.rgb = mix(vec3(0.32, 0.35, 0.37), vec3(0.62, 0.66, 0.68), 0.45 + rock * 0.2);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.84, 0.87, 0.89), snow * 0.75);
+        float pit = smoothstep(0.25, -0.55, vRock.y);
+        diffuseColor.rgb *= mix(1.0, 0.48, pit);`,
+      )
+  }
+  const terrain = new Mesh(geometry, terrainMat)
   terrain.receiveShadow = quality.shadows
   scene.add(terrain)
 
@@ -140,11 +159,20 @@ function buildSky() {
       void main() {
         vec3 d = normalize(vDir);
         float h = d.y;
-        vec3 field = mix(vec3(0.70, 0.73, 0.76), vec3(0.52, 0.56, 0.60), smoothstep(-0.15, 0.75, h));
-        vec3 voidCol = vec3(0.40, 0.44, 0.48);
+        vec3 field = mix(vec3(0.55, 0.59, 0.63), vec3(0.80, 0.83, 0.86), smoothstep(-0.02, 0.72, h));
+        float ridge = sin(atan(d.z, d.x) * 5.0) * 0.45 + sin(atan(d.z, d.x) * 11.0 + 1.2) * 0.28;
+        float peaks = smoothstep(0.18 + ridge * 0.08, 0.01, h);
+        field = mix(field, vec3(0.40, 0.45, 0.50), peaks * (1.0 - smoothstep(0.15, 1.15, uMood)));
+        vec3 voidCol = vec3(0.55, 0.58, 0.62);
+        float grid = 0.0;
+        if (uMood > 0.45 && uMood < 1.6) {
+          vec2 cell = abs(fract(vec2(atan(d.z, d.x) * 8.0, h * 18.0)) - 0.5);
+          grid = 1.0 - smoothstep(0.04, 0.09, min(cell.x, cell.y));
+          voidCol += vec3(0.08) * grid;
+        }
         float down = smoothstep(0.35, -0.9, h);
         vec3 rings = mix(vec3(0.62, 0.65, 0.68), vec3(0.50, 0.53, 0.56), down);
-        vec3 figure = vec3(0.28, 0.31, 0.34);
+        vec3 figure = vec3(0.1, 0.11, 0.12);
         vec3 color = field;
         float m = clamp(uMood, 0.0, 3.0);
         color = mix(color, voidCol, clamp(m, 0.0, 1.0));
@@ -203,7 +231,7 @@ function fogColor(mood: number) {
 }
 
 function fogDensity(mood: number) {
-  if (mood <= 1) return lerp(0.034, 0.012, mood)
+  if (mood <= 1) return lerp(0.016, 0.01, mood)
   if (mood <= 2) return lerp(0.012, 0.004, mood - 1)
   return lerp(0.004, 0.026, Math.min(1, mood - 2))
 }
