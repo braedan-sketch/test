@@ -60,52 +60,66 @@ function glowTexture() {
 }
 
 export function createMeteor(quality: Quality): Meteor {
-  const geometry = new IcosahedronGeometry(1, quality.low ? 3 : 4)
+  const geometry = new IcosahedronGeometry(1, quality.low ? 2 : 3)
   const position = geometry.attributes.position
   if (!position) throw new Error('Crystal is missing positions')
   const vertex = new Vector3()
   for (let i = 0; i < position.count; i += 1) {
     vertex.fromBufferAttribute(position, i).normalize()
-    const n = fbm(vertex.x * 1.4, vertex.y * 1.2, vertex.z * 1.5)
-    const spike = Math.abs(fbm(vertex.x * 2.4 + 2.2, vertex.y * 2.2, vertex.z * 1.8)) ** 3
-    const radius = 1.05 + n * 0.48 + spike * 1.15
+    const n = fbm(vertex.x * 1.6, vertex.y * 1.3, vertex.z * 1.5)
+    const spike = Math.abs(fbm(vertex.x * 2.8 + 1.7, vertex.y * 2.4, vertex.z * 2.1)) ** 2.4
+    const radius = 0.88 + Math.max(0, n) * 0.22 + spike * 1.45
     vertex.multiplyScalar(radius)
-    vertex.x *= 1.38
-    vertex.y *= 0.78
-    vertex.z *= 1.12
-    if (vertex.x > 0.15) vertex.x += spike * 0.55
-    if (vertex.z < -0.2) vertex.z -= spike * 0.25
+    vertex.x *= 1.48
+    vertex.y *= 0.7
+    vertex.z *= 1.08
     position.setXYZ(i, vertex.x, vertex.y, vertex.z)
   }
   geometry.computeVertexNormals()
-  geometry.scale(1.15, 1.15, 1.15)
+  geometry.scale(1.05, 1.05, 1.05)
+
+  const heart = new Mesh(
+    geometry,
+    new MeshPhysicalMaterial({
+      color: new Color('#e7f0f5'),
+      roughness: 0.32,
+      metalness: 0,
+      flatShading: true,
+      emissive: new Color('#d7e8f2'),
+      emissiveIntensity: 0.16,
+    }),
+  )
+  heart.scale.setScalar(0.62)
 
   const crystal = new Mesh(
     geometry,
     new MeshPhysicalMaterial({
-      color: new Color('#e4eef4'),
-      roughness: quality.crystalTransmission ? 0.05 : 0.12,
+      color: new Color('#e7f1f6'),
+      roughness: quality.crystalTransmission ? 0.06 : 0.1,
       metalness: 0,
-      transmission: quality.crystalTransmission ? 0.96 : 0,
-      thickness: quality.crystalTransmission ? 2.3 : 0,
-      ior: 1.46,
-      dispersion: quality.low ? 0 : 0.16,
-      attenuationColor: new Color('#d5e4f0'),
-      attenuationDistance: 1.7,
+      transmission: quality.crystalTransmission ? 0.55 : 0,
+      thickness: quality.crystalTransmission ? 2.4 : 0,
+      ior: 1.5,
+      dispersion: quality.low ? 0 : 0.2,
+      attenuationColor: new Color('#b7d0e4'),
+      attenuationDistance: 1.15,
       clearcoat: 1,
-      clearcoatRoughness: 0.04,
-      envMapIntensity: quality.crystalTransmission ? 1.25 : 1.45,
+      clearcoatRoughness: 0.03,
+      envMapIntensity: quality.crystalTransmission ? 1.7 : 1.35,
+      flatShading: true,
       transparent: !quality.crystalTransmission,
-      opacity: quality.crystalTransmission ? 1 : 0.88,
+      opacity: quality.crystalTransmission ? 1 : 0.92,
+      emissive: new Color('#d5e8f4'),
+      emissiveIntensity: quality.crystalTransmission ? 0.12 : 0.4,
     }),
   )
 
   const group = new Group()
   group.position.copy(CENTER)
-  group.add(crystal)
+  group.add(heart, crystal)
 
   const core = new Mesh(
-    new SphereGeometry(0.22, 24, 16),
+    new SphereGeometry(0.28, 24, 16),
     new MeshBasicMaterial({
       color: '#fffaf6',
       transparent: true,
@@ -129,11 +143,11 @@ export function createMeteor(quality: Quality): Meteor {
       toneMapped: false,
     })
     sprite = new Sprite(material)
-    sprite.scale.setScalar(1.8)
+    sprite.scale.setScalar(3.2)
     group.add(sprite)
   }
 
-  const light = new PointLight('#fff4ea', 2.4, 7, 1.6)
+  const light = new PointLight('#fff6f0', 4.2, 8, 1.5)
   group.add(light)
 
   const anchors = pickAnchors(position)
@@ -145,8 +159,8 @@ export function createMeteor(quality: Quality): Meteor {
       const shown = Math.max(0, Math.min(1, reveal))
       group.visible = shown > 0.02
       group.scale.setScalar(0.62 + shown * 0.38)
-      light.intensity = 1.2 + shown * 3.4
-      if (sprite) sprite.material.opacity = 0.25 + shown * 0.45
+      light.intensity = 2.4 + shown * 5.5
+      if (sprite) sprite.material.opacity = 0.4 + shown * 0.45
     },
     fillLabels(target) {
       group.updateWorldMatrix(true, true)

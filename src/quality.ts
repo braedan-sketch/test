@@ -30,7 +30,7 @@ export function detectQuality(): Quality {
       crystalTransmission: false,
       shadows: false,
       smaa: false,
-      points: 6500,
+      points: 9000,
       sprites: false,
     }
   }
@@ -44,7 +44,7 @@ export function detectQuality(): Quality {
     crystalTransmission: true,
     shadows: true,
     smaa: true,
-    points: 18000,
+    points: 34000,
     sprites: true,
   }
 }

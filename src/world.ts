@@ -17,10 +17,10 @@ import {
 import { lerp } from './math'
 import type { Quality } from './quality'
 
-const FIELD = new Color('#c5c8cc')
-const VOID = new Color('#a7adb2')
-const RINGS = new Color('#e6e7e9')
-const FIGURE = new Color('#7d868c')
+const FIELD = new Color('#b7bcc0')
+const VOID = new Color('#6d757b')
+const RINGS = new Color('#8e9499')
+const FIGURE = new Color('#3e484e')
 
 const CRATERS: Array<[number, number, number, number]> = [
   [7.5, 3.2, 3.4, 0.62],
@@ -140,11 +140,11 @@ function buildSky() {
       void main() {
         vec3 d = normalize(vDir);
         float h = d.y;
-        vec3 field = mix(vec3(0.78, 0.80, 0.82), vec3(0.62, 0.65, 0.68), smoothstep(-0.15, 0.75, h));
-        vec3 voidCol = vec3(0.66, 0.68, 0.70);
+        vec3 field = mix(vec3(0.70, 0.73, 0.76), vec3(0.52, 0.56, 0.60), smoothstep(-0.15, 0.75, h));
+        vec3 voidCol = vec3(0.40, 0.44, 0.48);
         float down = smoothstep(0.35, -0.9, h);
-        vec3 rings = mix(vec3(0.82, 0.83, 0.84), vec3(0.95, 0.95, 0.96), down);
-        vec3 figure = vec3(0.42, 0.46, 0.49);
+        vec3 rings = mix(vec3(0.62, 0.65, 0.68), vec3(0.50, 0.53, 0.56), down);
+        vec3 figure = vec3(0.28, 0.31, 0.34);
         vec3 color = field;
         float m = clamp(uMood, 0.0, 3.0);
         color = mix(color, voidCol, clamp(m, 0.0, 1.0));

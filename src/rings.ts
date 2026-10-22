@@ -22,23 +22,25 @@ export type Rings = {
 
 export function createRings(quality: Quality): Rings {
   const material = new MeshPhysicalMaterial({
-    color: new Color('#c5d0da'),
-    roughness: 0.42,
+    color: new Color('#c5d5e2'),
+    roughness: 0.08,
     metalness: 0,
-    transmission: quality.blockTransmission ? 0.28 : 0,
-    thickness: quality.blockTransmission ? 0.45 : 0,
-    ior: 1.31,
-    clearcoat: 0.45,
-    clearcoatRoughness: 0.2,
-    envMapIntensity: 0.7,
-    emissive: new Color('#f7fbff'),
-    emissiveIntensity: 0.18,
+    transmission: quality.blockTransmission ? 0.62 : 0,
+    thickness: quality.blockTransmission ? 1.4 : 0,
+    ior: 1.45,
+    attenuationColor: new Color('#c5d8ea'),
+    attenuationDistance: 0.9,
+    clearcoat: 1,
+    clearcoatRoughness: 0.04,
+    envMapIntensity: 1.35,
+    emissive: new Color('#e7f3fa'),
+    emissiveIntensity: quality.blockTransmission ? 0.22 : 0.45,
   })
 
   const specs = [
-    { radius: 1.82, tube: 0.3, segments: 5, gap: 0.26, speed: 0.9 },
-    { radius: 1.18, tube: 0.24, segments: 4, gap: 0.32, speed: -1.35 },
-    { radius: 0.64, tube: 0.18, segments: 3, gap: 0.38, speed: 1.8 },
+    { radius: 1.85, tube: 0.58, segments: 5, gap: 0.2, speed: 0.55 },
+    { radius: 1.15, tube: 0.42, segments: 4, gap: 0.24, speed: -0.85 },
+    { radius: 0.58, tube: 0.3, segments: 3, gap: 0.3, speed: 1.15 },
   ]
 
   const radial = quality.low ? 6 : 10
@@ -99,7 +101,7 @@ export function createRings(quality: Quality): Rings {
           toneMapped: false,
         }),
       )
-      halo.scale.setScalar(3.4)
+      halo.scale.setScalar(2.4)
       root.add(halo)
     }
   }
@@ -113,8 +115,8 @@ export function createRings(quality: Quality): Rings {
       for (const band of bands) {
         band.group.rotation.y = spin * Math.PI * 2 * band.speed
       }
-      light.intensity = 4 + shown * 7
-      if (halo) halo.material.opacity = 0.45 + shown * 0.5
+      light.intensity = 2.2 + shown * 3.2
+      if (halo) halo.material.opacity = 0.22 + shown * 0.28
     },
   }
 }

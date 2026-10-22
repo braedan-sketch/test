@@ -3,9 +3,7 @@ import {
   Box3,
   BufferAttribute,
   CanvasTexture,
-  EdgesGeometry,
   Group,
-  LineSegments,
   Mesh,
   MeshBasicMaterial,
   PlaneGeometry,
@@ -50,7 +48,7 @@ export type LabelAnchor = {
 export type Igloo = {
   group: Group
   uniforms: BlockUniforms
-  update: (burst: number, solid: number, dissolve: number) => void
+  update: (burst: number, solid: number, dissolve: number, time: number) => void
   fillLabels: (target: LabelAnchor[]) => void
   labelCount: number
   readout: (burst: number, solid: number) => string
@@ -69,6 +67,7 @@ type Piece = {
   outDist: number
   lift: number
   spin: number
+  phase: number
   tag: string
 }
 
@@ -92,32 +91,54 @@ function asMesh(object: Object3D): object is Mesh {
   return (object as Mesh).isMesh === true
 }
 
-function wireMaterial(solid: { value: number }) {
-  return new ShaderMaterial({
-    transparent: true,
-    depthWrite: false,
+function wireMaterial(solid: { value: number }, dissolve: { value: number }) {
+  const material = new ShaderMaterial({
     toneMapped: false,
     fog: false,
-    uniforms: { uSolid: solid },
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+    uniforms: { uSolid: solid, uDissolve: dissolve },
     vertexShader: /* glsl */ `
       varying vec3 vWPos;
+      varying vec3 vN;
+      varying vec3 vV;
       void main() {
         vec4 world = modelMatrix * vec4(position, 1.0);
+        vec4 view = viewMatrix * world;
         vWPos = world.xyz;
-        gl_Position = projectionMatrix * viewMatrix * world;
+        vN = normalize(mat3(modelViewMatrix) * normal);
+        vV = normalize(-view.xyz);
+        gl_Position = projectionMatrix * view;
       }
     `,
     fragmentShader: /* glsl */ `
       varying vec3 vWPos;
+      varying vec3 vN;
+      varying vec3 vV;
       uniform float uSolid;
+      uniform float uDissolve;
       ${NOISE}
       void main() {
-        float n = blNoise(vWPos * 2.35);
+        float n = blNoise(vWPos * 1.7);
         if (n < uSolid) discard;
-        gl_FragColor = vec4(1.0, 1.0, 1.0, 0.95);
+        if (uDissolve > 0.001) {
+          float dn = blNoise(vWPos * 3.1 + vec3(0.0, uDissolve * 1.4, 0.0));
+          if (dn < uDissolve) discard;
+        }
+        vec3 face = normalize(cross(dFdx(vWPos), dFdy(vWPos)));
+        float crease = length(fwidth(face));
+        float seam = smoothstep(0.015, 0.22, crease * 9.0);
+        float grazing = abs(dot(normalize(vN), normalize(vV)));
+        float silhouette = smoothstep(0.42, 0.04, grazing);
+        float line = max(seam, silhouette);
+        if (line < 0.16) discard;
+        float glow = 0.85 + line * 0.7;
+        gl_FragColor = vec4(vec3(0.9, 0.95, 1.0) * glow, 1.0);
       }
     `,
   })
+  return material
 }
 
 export async function loadIgloo(
@@ -137,7 +158,7 @@ export async function loadIgloo(
   onProgress(0.96)
 
   const { material, uniforms } = createBlockMaterial(quality)
-  const wires = wireMaterial(uniforms.uSolid)
+  const wires = wireMaterial(uniforms.uSolid, uniforms.uDissolve)
   const group = gltf.scene
   group.rotation.y = YAW
 
@@ -163,11 +184,6 @@ export async function loadIgloo(
     mesh.receiveShadow = quality.shadows
     mesh.updateMatrix()
 
-    const edges = new EdgesGeometry(geometry, 22)
-    const wire = new LineSegments(edges, wires)
-    wire.frustumCulled = false
-    mesh.add(wire)
-
     box.setFromBufferAttribute(position)
     const localCenter = box.getCenter(new Vector3()).applyMatrix4(mesh.matrix)
     pieces.push({
@@ -186,10 +202,22 @@ export async function loadIgloo(
       delay: 0,
       outDist: 0,
       lift: 0,
-      spin: (0.45 + hash01(hash * 4.4) * 0.7) * (hash > 0.5 ? 1 : -1),
+      spin: ((2 + hash01(hash * 4.4) * 4) * Math.PI) / 180 * (hash > 0.5 ? 1 : -1),
+      phase: hash01(hash * 9.1) * Math.PI * 2,
       tag: '',
     })
   })
+
+  const wireMeshes: Mesh[] = []
+  for (const piece of pieces) {
+    const wire = new Mesh(piece.mesh.geometry, wires)
+    wire.castShadow = false
+    wire.receiveShadow = false
+    wire.frustumCulled = false
+    wire.renderOrder = 3
+    piece.mesh.add(wire)
+    wireMeshes.push(wire)
+  }
 
   const shell = pieces.filter((piece) => !piece.tunnel)
   const core = new Vector3()
@@ -204,11 +232,12 @@ export async function loadIgloo(
     if (piece.radial.lengthSq() < 0.04) piece.radial.set(0, 1, 0)
     else piece.radial.normalize()
     const lead = piece.row >= 4 || piece.tunnel
-    const spread = (lead ? 1.22 : 1.02) + hash01(hashString(piece.mesh.name || 'piece') * 1.7) * (lead ? 0.28 : 0.32)
-    piece.outDist = radius * Math.min(1.5, spread)
-    piece.lift = radius * ((lead ? 0.22 : 0.1) + hash01(hashString(piece.mesh.uuid) * 2.1) * 0.12)
-    const rowLag = lead ? hash01(hashString(piece.mesh.name) * 3.3) * 0.05 : 0.16 + (4 - Math.min(piece.row, 4)) * 0.1
-    piece.delay = Math.min(0.62, rowLag)
+    const rowSpan = lead ? 0.48 : 0.25 + piece.row * 0.05
+    const jitter = hash01(hashString(piece.mesh.name || 'piece') * 1.7) * (lead ? 0.1 : 0.06)
+    piece.outDist = radius * Math.min(0.6, rowSpan + jitter)
+    piece.lift = radius * (0.018 + Math.min(piece.row, 4) * 0.012)
+    const rowLag = lead ? hash01(hashString(piece.mesh.name) * 3.3) * 0.05 : 0.05 + (4 - Math.min(piece.row, 4)) * 0.035
+    piece.delay = Math.min(0.22, rowLag)
   }
 
   group.updateMatrixWorld(true)
@@ -301,33 +330,38 @@ export async function loadIgloo(
     group,
     uniforms,
     labelCount: labelPieces.length,
-    update(burst, solid, dissolve) {
+    update(burst, solid, dissolve, time) {
       coreWorld.copy(core).applyMatrix4(group.matrixWorld)
       uniforms.uCenter.value.copy(coreWorld)
       uniforms.uBurst.value = burst
       uniforms.uSolid.value = solid
       uniforms.uDissolve.value = dissolve
       group.visible = dissolve < 0.985
+      const showWire = solid < 0.992 && dissolve < 0.98
+      for (const wire of wireMeshes) wire.visible = showWire
 
-      const glow = burst * (1 - smoother(dissolve))
-      coreMat.uniforms.uGlow.value = glow
-      coreMesh.scale.setScalar(0.35 + glow * 1.15)
+      const glow = burst * burst * (1 - smoother(dissolve))
+      coreMat.uniforms.uGlow.value = glow * 0.72
+      coreMesh.scale.setScalar(0.62 + glow * 0.55)
       glowLayers.forEach((layer, index) => {
-        const weight = index === 0 ? 0.55 : index === 1 ? 0.26 : 0.12
+        const weight = index === 0 ? 0.34 : index === 1 ? 0.16 : 0.07
         layer.material.opacity = glow * weight
-        layer.sprite.scale.setScalar(layer.scale * (0.75 + glow * 0.85))
+        layer.sprite.scale.setScalar(layer.scale * (0.7 + glow * 0.45))
       })
-      light.intensity = glow * 7.5
-      light.distance = 3.2 + glow * 6.5
+      light.intensity = glow * 2.6
+      light.distance = 2.8 + glow * 3.4
       ;(contact.material as MeshBasicMaterial).opacity = (1 - smoother(burst)) * solid * (1 - dissolve)
 
       for (const piece of pieces) {
         const span = Math.max(0.001, 1 - piece.delay)
         const u = clamp((burst - piece.delay) / span, 0, 1)
-        const t = u * u * (3 - 2 * u)
+        const t = u * u * u * (u * (u * 6 - 15) + 10)
+        const bob = Math.sin(time * 0.62 + piece.phase) * 0.03 * t
+        const sway = Math.cos(time * 0.41 + piece.phase * 1.7) * 0.016 * t
         piece.mesh.position.copy(piece.basePos)
         piece.mesh.position.addScaledVector(piece.radial, t * piece.outDist)
-        piece.mesh.position.y += t * piece.lift
+        piece.mesh.position.y += t * piece.lift + bob
+        piece.mesh.position.x += sway
         spin.setFromAxisAngle(piece.axis, t * piece.spin)
         piece.mesh.quaternion.copy(piece.baseQuat).multiply(spin)
       }

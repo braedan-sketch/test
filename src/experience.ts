@@ -55,12 +55,12 @@ declare global {
   }
 }
 
-const HIGH: readonly [number, number, number] = [0.15, 10.6, 6.2]
-const HIGH_TARGET: readonly [number, number, number] = [0.05, 0.85, 0.1]
-const EYE: readonly [number, number, number] = [0.7, 2.25, 10.6]
-const EYE_TARGET: readonly [number, number, number] = [0.05, 1.4, 0.05]
-const WIDE: readonly [number, number, number] = [1.05, 3.15, 15.2]
-const WIDE_TARGET: readonly [number, number, number] = [0.0, 1.75, 0.0]
+const HIGH: readonly [number, number, number] = [0.05, 11.4, 4.6]
+const HIGH_TARGET: readonly [number, number, number] = [0.0, 0.35, 0.25]
+const EYE: readonly [number, number, number] = [1.05, 2.05, 9.15]
+const EYE_TARGET: readonly [number, number, number] = [0.0, 1.2, 0.05]
+const WIDE: readonly [number, number, number] = [1.35, 2.55, 10.15]
+const WIDE_TARGET: readonly [number, number, number] = [0.0, 1.35, 0.0]
 
 export async function startExperience(overlay: Overlay) {
   const canvas = document.querySelector('#view')
@@ -115,8 +115,8 @@ export async function startExperience(overlay: Overlay) {
     blendFunction: BlendFunction.OVERLAY,
     premultiply: true,
   })
-  noise.blendMode.setOpacity(0.14)
-  const vignette = new VignetteEffect({ darkness: 0.32, offset: 0.28 })
+  noise.blendMode.setOpacity(0.07)
+  const vignette = new VignetteEffect({ darkness: 0.38, offset: 0.32 })
   const smaa = quality.smaa ? new SMAAEffect({ preset: SMAAPreset.MEDIUM }) : null
   composer.addPass(new RenderPass(scene, camera))
   composer.addPass(new EffectPass(camera, bloom))
@@ -241,7 +241,7 @@ export async function startExperience(overlay: Overlay) {
       renderer.setClearColor(clear, 1)
       scene.environmentIntensity = phase.screen === 'meteor' || phase.screen === 'rift' ? 0.85 : 0.36
 
-      igloo?.update(phase.burst, phase.solid, phase.dissolve)
+      igloo?.update(phase.burst, phase.solid, phase.dissolve, reducedMotion ? 0 : now / 1000)
       meteor.update(phase.meteorReveal)
       rings.update(phase.ringsT, phase.ringsShown)
       figure.update(phase.figureAppear, phase.figureBlow, reducedMotion ? 0 : now / 1000, dpr)
@@ -354,8 +354,8 @@ function readPhase(global: number, marks: Marks): Phase {
   const inRings = global >= marks.rings && global < marks.figure
   const inFigure = global >= marks.figure
 
-  const solid = inField ? smoother(clamp((fieldT - 0.12) / 0.28, 0, 1)) : 1
-  const burst = inField ? clamp((fieldT - 0.42) / 0.58, 0, 1) : 1
+  const solid = inField ? smoother(clamp((fieldT - 0.15) / 0.16, 0, 1)) : 1
+  const burst = inField ? clamp((fieldT - 0.4) / 0.6, 0, 1) : 1
   const dissolve = inField ? 0 : inRift ? smoother(clamp((riftT - 0.22) / 0.56, 0, 1)) : 1
   const meteorReveal = inField ? 0 : inRift ? smoother(clamp((riftT - 0.34) / 0.5, 0, 1)) : inMeteor ? 1 - smoother(clamp((meteorT - 0.8) / 0.2, 0, 1)) : 0
   const ringsShown = inRings ? 1 : 0
@@ -363,14 +363,14 @@ function readPhase(global: number, marks: Marks): Phase {
   const figureBlow = inFigure ? smoother(clamp((figureT - 0.68) / 0.16, 0, 1)) : 0
 
   const ripple = inRift ? Math.sin(riftT * Math.PI) : 0
-  const meteorWhite = inMeteor ? smoother(clamp((meteorT - 0.7) / 0.26, 0, 1)) : 0
+  const meteorWhite = inMeteor ? smoother(clamp((meteorT - 0.58) / 0.32, 0, 1)) : 0
   const ringsIn = inRings ? 1 - smoother(clamp(ringsT / 0.12, 0, 1)) : 0
   const ringsOut = inRings ? smoother(clamp((ringsT - 0.8) / 0.2, 0, 1)) : 0
   const figureIn = inFigure ? 1 - smoother(clamp(figureT / 0.1, 0, 1)) : 0
-  const white = clamp(meteorWhite * 0.15 + ringsIn + ringsOut + figureIn * 0.75, 0, 1)
+  const white = clamp(meteorWhite * 0.92 + ringsIn + ringsOut + figureIn * 0.75, 0, 1)
   const glitch = inFigure ? smoother(clamp((figureT - 0.78) / 0.2, 0, 1)) : 0
   const blur = clamp(ripple * 0.95 + meteorWhite * 0.85 + ringsOut * 0.35, 0, 1)
-  const chroma = clamp(ripple + (inField && burst > 0.84 ? (burst - 0.84) / 0.16 : 0) * 0.22 + glitch * 0.45, 0, 1)
+  const chroma = clamp(ripple * 0.85 + meteorWhite * 0.28 + glitch * 0.65, 0, 1)
 
   let screen: ScreenId = 'field'
   if (inFigure) screen = 'figure'
@@ -418,9 +418,9 @@ function readPhase(global: number, marks: Marks): Phase {
 function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, camera: PerspectiveCamera) {
   up.set(0, 1, 0)
   if (phase.screen === 'field' || (phase.screen === 'rift' && phase.riftT < 0.02)) {
-    const dolly = clamp(phase.fieldT / 0.42, 0, 1)
-    const boom = clamp((phase.fieldT - 0.42) / 0.58, 0, 1)
-    if (phase.fieldT < 0.42) {
+    const dolly = clamp(phase.fieldT / 0.4, 0, 1)
+    const boom = clamp((phase.fieldT - 0.4) / 0.6, 0, 1)
+    if (phase.fieldT < 0.4) {
       mix3(pos, HIGH, EYE, smoother(dolly))
       mix3(target, HIGH_TARGET, EYE_TARGET, smoother(dolly))
     } else {
@@ -428,30 +428,30 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
       mix3(target, EYE_TARGET, WIDE_TARGET, smoother(boom))
     }
   } else if (phase.screen === 'rift') {
-    const meteorPos: [number, number, number] = [meteorCenter.x + 1.15, meteorCenter.y + 0.35, meteorCenter.z + 8.2]
+    const meteorPos: [number, number, number] = [meteorCenter.x + 0.55, meteorCenter.y + 0.15, meteorCenter.z + 4.8]
     const meteorTarget: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
     mix3(pos, WIDE, meteorPos, smoother(phase.riftT))
     mix3(target, WIDE_TARGET, meteorTarget, smoother(phase.riftT))
   } else if (phase.screen === 'meteor') {
     const t = phase.meteorT
     pos.set(
-      lerp(meteorCenter.x + 1.15, meteorCenter.x - 0.05, t),
-      lerp(meteorCenter.y + 0.35, meteorCenter.y + 0.02, t),
-      lerp(meteorCenter.z + 8.2, meteorCenter.z - 3.1, t),
+      lerp(meteorCenter.x + 0.55, meteorCenter.x + 0.05, t),
+      lerp(meteorCenter.y + 0.15, meteorCenter.y, t),
+      lerp(meteorCenter.z + 4.8, meteorCenter.z - 1.35, t),
     )
-    target.set(meteorCenter.x, meteorCenter.y, pos.z - 1.4)
+    target.set(meteorCenter.x, meteorCenter.y, pos.z - 0.85)
   } else if (phase.screen === 'rings') {
-    const y = lerp(5.4, 0.16, phase.ringsT)
-    const roll = phase.ringsT * 0.62
+    const y = lerp(8.4, 2.35, smoother(phase.ringsT))
+    const roll = phase.ringsT * 0.72
     pos.set(0, y, 0)
     target.set(0, 0, 0)
     up.set(Math.sin(roll), 0, Math.cos(roll))
   } else {
     const orbit = clamp(phase.figureT / 0.7, 0, 1)
-    const ang = lerp(1.15, 2.45, orbit)
-    const radius = lerp(5.15, 4.35, orbit)
-    pos.set(Math.sin(ang) * radius, lerp(1.35, 1.7, orbit) + phase.figureBlow * 0.35, Math.cos(ang) * radius)
-    target.set(0.15, 0.95, 0.05)
+    const ang = lerp(1.05, 1.85, orbit)
+    const radius = lerp(4.15, 3.55, orbit)
+    pos.set(Math.sin(ang) * radius, lerp(1.05, 1.28, orbit) + phase.figureBlow * 0.2, Math.cos(ang) * radius)
+    target.set(0.02, 0.72, 0.05)
   }
 
   camera.up.copy(up)
@@ -470,22 +470,25 @@ function applyGrade(
   warp: WarpEffect,
   aspect: number,
 ) {
-  const burst = phase.screen === 'field' ? phase.burst : phase.screen === 'rift' ? 1 : 0
-  let intensity = 0.34 + burst * 0.95
-  let threshold = lerp(0.78, 0.5, burst)
-  if (phase.screen === 'field' && phase.solid < 0.35) {
-    intensity = 0.72
-    threshold = 0.62
+  const burst = phase.screen === 'field' ? phase.burst : 0
+  let intensity = 0.36 + burst * 0.2
+  let threshold = 0.84
+  if (phase.screen === 'field' && phase.solid < 0.55) {
+    intensity = 0.58
+    threshold = 0.66
   }
   if (phase.screen === 'rings') {
-    intensity = 1.25
-    threshold = 0.8
+    intensity = 0.55
+    threshold = 0.88
   }
-  if (phase.screen === 'meteor') intensity = 0.55 + phase.meteorT * 0.35
-  if (phase.white > 0.4) intensity += 0.3
+  if (phase.screen === 'meteor') {
+    intensity = 0.28 + phase.meteorT * 0.2
+    threshold = 0.9
+  }
+  if (phase.white > 0.4) intensity += 0.22
   bloom.intensity = intensity
   bloom.luminanceMaterial.threshold = threshold
-  const fringe = 0.00035 + phase.chroma * 0.012
+  const fringe = phase.chroma > 0.02 ? phase.chroma * 0.011 : 0
   chromatic.offset.set(fringe, fringe * 0.62)
   warp.setWarp(phase.ripple, phase.blur, phase.glitch, phase.white, phase.riftT + phase.figureT, aspect)
 }
@@ -536,8 +539,8 @@ function projectLabels(
 }
 
 function addLights(scene: Scene, shadows: boolean) {
-  scene.add(new HemisphereLight('#d7e0e6', '#6a7378', 0.58))
-  const key = new DirectionalLight('#f4f7fa', 0.72)
+  scene.add(new HemisphereLight('#e7eef3', '#8e989e', 0.74))
+  const key = new DirectionalLight('#f5f8fb', 0.46)
   key.position.set(-7.2, 12, 8)
   key.target.position.set(0.1, 1.2, 0)
   scene.add(key, key.target)
@@ -554,7 +557,7 @@ function addLights(scene: Scene, shadows: boolean) {
     key.shadow.bias = -0.0004
     key.shadow.normalBias = 0.03
   }
-  const fill = new DirectionalLight('#e7eef4', 0.22)
+  const fill = new DirectionalLight('#d5e3ee', 0.34)
   fill.position.set(6.2, 4.2, 7)
   scene.add(fill)
 }
@@ -576,11 +579,13 @@ function createEnvironment(renderer: WebGLRenderer) {
       void main() {
         vec3 direction = normalize(vDir);
         float height = direction.y;
-        vec3 ground = vec3(0.55, 0.58, 0.6);
-        vec3 horizon = vec3(0.8, 0.83, 0.86);
-        vec3 zenith = vec3(0.62, 0.68, 0.74);
+        vec3 ground = vec3(0.4, 0.44, 0.47);
+        vec3 horizon = vec3(0.93, 0.95, 0.96);
+        vec3 zenith = vec3(0.52, 0.6, 0.68);
         vec3 color = mix(ground, horizon, smoothstep(-0.35, 0.08, height));
-        color = mix(color, zenith, smoothstep(0.0, 0.65, height));
+        color = mix(color, zenith, smoothstep(0.05, 0.7, height));
+        float sun = pow(max(dot(direction, normalize(vec3(-0.35, 0.78, 0.4))), 0.0), 28.0);
+        color += vec3(1.0) * sun * 0.9;
         gl_FragColor = vec4(color, 1.0);
       }
     `,

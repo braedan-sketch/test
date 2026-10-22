@@ -147,8 +147,8 @@ header {
   margin: 0;
   font-family: var(--display);
   font-weight: 700;
-  font-size: clamp(46px, 6vw, 84px);
-  letter-spacing: 0.07em;
+  font-size: clamp(42px, 5.6vw, 78px);
+  letter-spacing: 0.14em;
   line-height: 0.8;
   color: var(--paper);
   text-shadow: 0 1px 2px rgba(12, 18, 22, 0.28);
@@ -360,14 +360,13 @@ header {
 }
 
 .is-glitching {
-  animation: glitch 0.38s steps(2, end) 2;
+  animation: glitch 0.5s steps(2, end) 1;
 }
 
 @keyframes glitch {
-  0% { transform: translate(0); text-shadow: 1px 0 rgba(190, 220, 255, 0.8), -1px 0 rgba(255, 210, 220, 0.7); }
-  35% { transform: translate(-1px, 0); clip-path: inset(15% 0 45% 0); }
-  70% { transform: translate(1px, 0); clip-path: inset(50% 0 10% 0); }
-  100% { transform: none; clip-path: none; }
+  0% { text-shadow: 1px 0 rgba(190, 220, 255, 0.75), -1px 0 rgba(255, 210, 220, 0.55); }
+  45% { text-shadow: -1px 0 rgba(190, 220, 255, 0.65), 1px 0 rgba(255, 210, 220, 0.45); }
+  100% { text-shadow: none; }
 }
 
 .cycle {
