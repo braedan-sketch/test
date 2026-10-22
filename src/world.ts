@@ -7,6 +7,7 @@ import {
   Float32BufferAttribute,
   FogExp2,
   Group,
+  BackSide,
   LineBasicMaterial,
   LineSegments,
   Mesh,
@@ -15,6 +16,7 @@ import {
   PlaneGeometry,
   Points,
   ShaderMaterial,
+  SphereGeometry,
   Sprite,
   SpriteMaterial,
   TorusGeometry,
@@ -99,8 +101,9 @@ export type World = {
 }
 
 export function createWorld(scene: Scene, quality: Quality): World {
-  scene.fog = new FogExp2(FOG, quality.low ? 0.04 : 0.032)
+  scene.fog = new FogExp2(FOG, quality.low ? 0.022 : 0.014)
   scene.background = FOG
+  scene.add(buildSky())
 
   const terrain = buildTerrain(quality.terrainSeg)
   terrain.receiveShadow = quality.shadows
@@ -216,6 +219,38 @@ export function createWorld(scene: Scene, quality: Quality): World {
       }
     },
   }
+}
+
+function buildSky() {
+  const material = new ShaderMaterial({
+    side: BackSide,
+    depthWrite: false,
+    fog: false,
+    vertexShader: /* glsl */ `
+      varying vec3 vDir;
+      void main() {
+        vDir = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying vec3 vDir;
+      void main() {
+        float h = normalize(vDir).y;
+        vec3 zenith = vec3(0.58, 0.63, 0.68);
+        vec3 high = vec3(0.70, 0.75, 0.78);
+        vec3 horizon = vec3(0.79, 0.83, 0.85);
+        vec3 below = vec3(0.67, 0.71, 0.74);
+        vec3 color = mix(below, horizon, smoothstep(-0.25, 0.02, h));
+        color = mix(color, high, smoothstep(0.0, 0.22, h));
+        color = mix(color, zenith, smoothstep(0.22, 0.75, h));
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `,
+  })
+  const sky = new Mesh(new SphereGeometry(180, 24, 14), material)
+  sky.frustumCulled = false
+  return sky
 }
 
 function buildTerrain(segments: number) {

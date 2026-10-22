@@ -80,10 +80,10 @@ export async function startExperience(overlay: Overlay) {
   }
 
   const scene = new Scene()
-  const camera = new PerspectiveCamera(33, 1, 0.08, 180)
+  const camera = new PerspectiveCamera(33, 1, 0.08, 420)
   const world = createWorld(scene, quality)
   scene.environment = createEnvironment(renderer)
-  scene.environmentIntensity = 0.42
+  scene.environmentIntensity = 0.34
   addLights(scene, quality.shadows)
 
   const composer = new EffectComposer(renderer, {
@@ -91,8 +91,8 @@ export async function startExperience(overlay: Overlay) {
     multisampling: 0,
   })
   const bloom = new BloomEffect({
-    intensity: 0.32,
-    luminanceThreshold: 0.9,
+    intensity: 0.28,
+    luminanceThreshold: 0.86,
     luminanceSmoothing: 0.18,
     mipmapBlur: true,
     radius: 0.62,
@@ -108,16 +108,14 @@ export async function startExperience(overlay: Overlay) {
   })
   noise.blendMode.setOpacity(0.16)
   const vignette = new VignetteEffect({ darkness: 0.28, offset: 0.3 })
-  const effects = [
-    bloom,
-    chromatic,
-    ...(quality.smaa ? [new SMAAEffect({ preset: SMAAPreset.MEDIUM })] : []),
-    noise,
-    vignette,
-    new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC }),
-  ]
+  const smaa = quality.smaa ? new SMAAEffect({ preset: SMAAPreset.MEDIUM }) : null
   composer.addPass(new RenderPass(scene, camera))
-  composer.addPass(new EffectPass(camera, ...effects))
+  composer.addPass(new EffectPass(camera, bloom))
+  composer.addPass(new EffectPass(camera, chromatic))
+  if (smaa) composer.addPass(new EffectPass(camera, smaa))
+  composer.addPass(
+    new EffectPass(camera, noise, vignette, new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC })),
+  )
 
   let dpr = Math.min(window.devicePixelRatio || 1, quality.dprCap)
   const resize = () => {
@@ -235,17 +233,17 @@ export async function startExperience(overlay: Overlay) {
 
     world.update(time, latticeT)
     world.setReveal(smoothstepRelease(latticeT, 0.05, 0.42))
-    igloo?.update(anim, dissolve, latticeT)
+    igloo?.update(anim, dissolve, latticeT, time)
     const intro = cameraIntro(revealed, revealedAt, global)
     applyCamera(global, time, anim, pos, target, camera, intro)
 
     const spike = Math.exp(-((latticeT - 0.16) ** 2) / 0.0035)
-    bloom.intensity = 0.28 + anim * 0.62 + spike * 0.25
+    bloom.intensity = 0.2 + anim * 0.32 + spike * 0.16
     chromatic.offset.set(0.00035 + spike * 0.005, 0.00018 + spike * 0.0026)
     overlay.setFlash(spike * 0.42)
-    overlay.setUiDim(1 - anim * 0.22)
+    overlay.setUiDim(1 - anim * 0.06)
     overlay.setScrollProgress(global)
-    projectLabels(overlay, igloo, slots, camera, ndc, anim, latticeT, intro)
+    projectLabels(overlay, igloo, slots, camera, ndc, latticeT, intro)
     overlay.setTelemetry(
       igloo ? igloo.readout(anim) : 'HOLD',
       `${camera.position.x.toFixed(2)}   ${camera.position.y.toFixed(2)}   ${camera.position.z.toFixed(2)}`,
@@ -306,10 +304,11 @@ function applyCamera(
   const latticeSpan = lattice.end - lattice.start
 
   const keys: Keyframe[] = [
-    { at: field.start, pos: [0.25, 2.2, 7.7], target: [0.12, 1.42, 0.08] },
-    { at: field.end, pos: [0.4, 1.92, 6.55], target: [0.18, 1.55, 0.06] },
-    { at: release.start + releaseSpan * 0.48, pos: [0.85, 2.55, 8.1], target: [0.12, 1.9, 0.02] },
-    { at: release.end, pos: [0.1, 2.7, 9.8], target: [0.16, 1.72, 0.02] },
+    { at: field.start, pos: [-2.35, 6.05, 17.6], target: [-0.85, 1.48, 0.04] },
+    { at: field.end, pos: [-1.85, 5.75, 16.8], target: [-0.75, 1.58, 0.02] },
+    { at: release.start + releaseSpan * 0.2, pos: [-1.6, 6.15, 17.4], target: [-0.95, 1.75, 0] },
+    { at: release.start + releaseSpan * 0.55, pos: [-0.45, 7.05, 18.8], target: [-1.15, 2.25, 0] },
+    { at: release.end, pos: [0.15, 7.35, 19.6], target: [-1.2, 2.35, 0] },
     { at: lattice.start + latticeSpan * 0.42, pos: [2.7, 2.4, 6.5], target: [0.08, 1.42, 0] },
     { at: Math.max(lattice.end, note.start), pos: [-0.35, 2.45, 8.3], target: [0.4, 1.45, 0] },
     { at: 1, pos: [-2.55, 1.95, 8.9], target: [0.75, 1.32, 0] },
@@ -335,14 +334,14 @@ function applyCamera(
 
   if (!reducedMotion && intro < 1) {
     const k = 1 - smoother(intro)
-    pos.x += (pos.x - target.x) * 0.36 * k
-    pos.y += (pos.y - target.y) * 0.36 * k + 0.4 * k
-    pos.z += (pos.z - target.z) * 0.36 * k
+    pos.x += (pos.x - target.x) * 0.14 * k
+    pos.y += (pos.y - target.y) * 0.14 * k + 0.25 * k
+    pos.z += (pos.z - target.z) * 0.14 * k
   }
 
   if (!reducedMotion && (anim < 0.012 || anim > 0.992)) {
-    pos.x += Math.sin(time * 0.13) * 0.16
-    pos.y += Math.sin(time * 0.1 + 0.6) * 0.055
+    pos.x += Math.sin(time * 0.13) * 0.28
+    pos.y += Math.sin(time * 0.1 + 0.6) * 0.08
   }
 
   camera.position.copy(pos)
@@ -355,7 +354,6 @@ function projectLabels(
   slots: LabelAnchor[],
   camera: PerspectiveCamera,
   ndc: Vector3,
-  anim: number,
   latticeT: number,
   intro: number,
 ) {
@@ -364,10 +362,7 @@ function projectLabels(
   const width = window.innerWidth
   const height = window.innerHeight
   const scale = Math.min(1, width / 1100)
-  const fade =
-    (1 - smoothstepRelease(anim, 0.04, 0.48)) *
-    (1 - smoothstepRelease(latticeT, 0, 0.16)) *
-    smoother(Math.max(intro, 0.001))
+  const fade = (1 - smoothstepRelease(latticeT, 0, 0.2)) * smoother(Math.max(intro, 0.001))
   const views: ProjectedLabel[] = slots.map((slot) => {
     ndc.copy(slot.position).project(camera)
     const anchorX = (ndc.x * 0.5 + 0.5) * width

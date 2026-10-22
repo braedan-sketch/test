@@ -27,7 +27,7 @@ npm run preview
 The canvas stays fixed. Scroll scrubs one continuous scene:
 
 1. **Field** — the structure on procedural snow, drifting flakes, a slow camera move, and HUD callouts on the courses.
-2. **Release** — the crown lifts first. Each lower course follows, tumbling out around a glowing core. Labels fade as the bloom comes up.
+2. **Release** — scroll opens a slow exploded view. Blocks drift a short way along their outward direction, crown and entrance leading slightly, then float. Scroll back and they settle together. Seams and the core brighten as the gaps open.
 3. **Lattice** — the blocks dissolve into floating arcs, concentric rings, and a clear block.
 4. **Note** — a short manifesto and a contact link.
 

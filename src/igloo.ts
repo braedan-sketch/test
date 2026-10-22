@@ -9,6 +9,7 @@ import {
   PlaneGeometry,
   PointLight,
   Quaternion,
+  ShaderMaterial,
   SphereGeometry,
   Sprite,
   SpriteMaterial,
@@ -25,9 +26,6 @@ import { createBlockMaterial, type BlockUniforms } from './ice'
 import { clamp, hash01, hashString, smoother } from './math'
 import type { Quality } from './quality'
 
-/** Crown (highest row) leaves first. Index is the glTF `row` extra. */
-const ROW_START = [0.64, 0.5, 0.36, 0.22, 0.1, 0]
-const ROW_DURATION = 0.3
 const YAW = -0.42
 
 const LABEL_OFFSETS: Array<[number, number]> = [
@@ -39,9 +37,10 @@ const LABEL_OFFSETS: Array<[number, number]> = [
   [112, 46],
 ]
 
+/** Linear scrub across most of the release section. Scroll back reverses it. */
 export function burstAmount(sectionT: number) {
-  if (sectionT <= 0.1) return 0
-  return clamp((sectionT - 0.1) / 0.9, 0, 1)
+  if (sectionT <= 0.06) return 0
+  return clamp((sectionT - 0.06) / 0.82, 0, 1)
 }
 
 type Piece = {
@@ -53,14 +52,12 @@ type Piece = {
   localCenter: Vector3
   worldCenter: Vector3
   radial: Vector3
-  tangent: Vector3
   axis: Vector3
   delay: number
   outDist: number
   lift: number
-  arc: number
-  side: number
   spin: number
+  phase: number
 }
 
 export type LabelAnchor = {
@@ -73,7 +70,7 @@ export type LabelAnchor = {
 export type Igloo = {
   group: Group
   uniforms: BlockUniforms
-  update: (anim: number, dissolve: number, abstractT: number) => void
+  update: (anim: number, dissolve: number, abstractT: number, time: number) => void
   fillLabels: (target: LabelAnchor[]) => void
   labelCount: number
   copyCore: (target: Vector3) => void
@@ -121,7 +118,6 @@ export async function loadIgloo(
   group.rotation.y = YAW
 
   const pieces: Piece[] = []
-  const up = new Vector3(0, 1, 0)
   const box = new Box3()
 
   group.traverse((object) => {
@@ -154,18 +150,16 @@ export async function loadIgloo(
       localCenter,
       worldCenter: new Vector3(),
       radial: new Vector3(),
-      tangent: new Vector3(),
       axis: new Vector3(
         hash01(hash * 3.1) * 2 - 1,
         hash01(hash * 5.7) * 2 - 1,
         hash01(hash * 8.2) * 2 - 1,
       ).normalize(),
-      delay: hash * 0.055,
-      outDist: 1.45 + row * 0.42 + hash * 0.9,
-      lift: 0.4 + row * 0.24 + hash01(hash * 2.2) * 0.2,
-      arc: 0.16 + row * 0.06,
-      side: (hash - 0.5) * 1.15,
-      spin: (0.75 + hash01(hash * 4.4) * 1.65) * (hash > 0.5 ? 1 : -1),
+      delay: 0,
+      outDist: 0,
+      lift: 0,
+      spin: (0.045 + hash01(hash * 4.4) * 0.07) * (hash > 0.5 ? 1 : -1),
+      phase: hash * Math.PI * 2,
     })
   })
 
@@ -174,14 +168,18 @@ export async function loadIgloo(
   for (const piece of shell) core.add(piece.localCenter)
   if (shell.length > 0) core.multiplyScalar(1 / shell.length)
 
+  let radius = 1
+  for (const piece of shell) radius = Math.max(radius, piece.localCenter.distanceTo(core))
+
   for (const piece of pieces) {
     piece.radial.copy(piece.localCenter).sub(core)
-    piece.radial.y *= 0.38
     if (piece.radial.lengthSq() < 0.04) piece.radial.set(0, 1, 0)
     else piece.radial.normalize()
-    piece.tangent.crossVectors(piece.radial, up)
-    if (piece.tangent.lengthSq() < 0.2) piece.tangent.set(1, 0, 0)
-    else piece.tangent.normalize()
+    const lead = piece.row >= 4 || piece.tunnel
+    const spread = (lead ? 0.58 : 0.34) + hash01(hashString(piece.mesh.name || 'piece') * 1.7) * 0.28
+    piece.outDist = radius * Math.min(0.95, spread)
+    piece.lift = (lead ? 0.1 : 0.045) + hash01(hashString(piece.mesh.uuid) * 2.1) * 0.03
+    piece.delay = lead ? 0 : 0.06 + (4 - Math.min(piece.row, 4)) * 0.015
   }
 
   group.updateMatrixWorld(true)
@@ -210,38 +208,62 @@ export async function loadIgloo(
   contact.renderOrder = 2
   group.add(contact)
 
-  const coreMat = new MeshBasicMaterial({
-    color: '#f4f8ff',
+  const coreMat = new ShaderMaterial({
     transparent: true,
-    opacity: 0.18,
-    blending: AdditiveBlending,
     depthWrite: false,
+    blending: AdditiveBlending,
     toneMapped: false,
+    uniforms: { uGlow: { value: 0 } },
+    vertexShader: /* glsl */ `
+      varying vec3 vLocal;
+      void main() {
+        vLocal = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying vec3 vLocal;
+      uniform float uGlow;
+      void main() {
+        float r = clamp(length(vLocal), 0.0, 1.0);
+        float hot = exp(-r * r * 10.0);
+        float body = exp(-r * r * 2.6);
+        float haze = exp(-r * r * 0.9);
+        float alpha = (hot * 0.85 + body * 0.4 + haze * 0.16) * uGlow;
+        vec3 warm = vec3(1.15, 0.78, 0.42);
+        vec3 color = warm * (hot * 1.8 + body * 0.55 + haze * 0.14) * uGlow;
+        if (alpha < 0.004) discard;
+        gl_FragColor = vec4(color, alpha);
+      }
+    `,
   })
-  coreMat.color.setRGB(2.4, 2.5, 2.7)
-  const coreMesh = new Mesh(new SphereGeometry(0.42, 28, 20), coreMat)
+  const coreMesh = new Mesh(new SphereGeometry(1, 28, 20), coreMat)
   coreMesh.position.copy(core)
+  coreMesh.scale.setScalar(0.35)
   coreMesh.renderOrder = 3
   group.add(coreMesh)
 
-  const spriteMat = new SpriteMaterial({
-    map: glowMap ?? undefined,
-    color: '#f7fbff',
-    transparent: true,
-    opacity: 0.08,
-    blending: AdditiveBlending,
-    depthWrite: false,
-    depthTest: false,
-    toneMapped: false,
+  const glowLayers = [0.55, 1.35, 2.7].map((scale, index) => {
+    const material = new SpriteMaterial({
+      map: glowMap ?? undefined,
+      color: '#ffd2b0',
+      transparent: true,
+      opacity: 0,
+      blending: AdditiveBlending,
+      depthWrite: false,
+      depthTest: true,
+      toneMapped: false,
+    })
+    material.color.setRGB(1.35 - index * 0.12, 0.95 - index * 0.1, 0.62)
+    const sprite = new Sprite(material)
+    sprite.position.copy(core)
+    sprite.scale.setScalar(scale)
+    sprite.renderOrder = 4
+    group.add(sprite)
+    return { sprite, material, scale }
   })
-  spriteMat.color.setRGB(1.15, 1.2, 1.3)
-  const glow = new Sprite(spriteMat)
-  glow.position.copy(core)
-  glow.scale.set(1.6, 1.6, 1)
-  glow.renderOrder = 4
-  group.add(glow)
 
-  const light = new PointLight('#d7e7ff', 1.4, 7, 2)
+  const light = new PointLight('#ffc9a4', 0.2, 7, 2)
   light.position.copy(core)
   group.add(light)
 
@@ -253,7 +275,7 @@ export async function loadIgloo(
     group,
     uniforms,
     labelCount: labelPieces.length,
-    update(anim, dissolve, abstractT) {
+    update(anim, dissolve, abstractT, time) {
       coreWorld.copy(core).applyMatrix4(group.matrixWorld)
       uniforms.uCenter.value.copy(coreWorld)
       uniforms.uBurst.value = anim
@@ -261,22 +283,27 @@ export async function loadIgloo(
       group.visible = dissolve < 0.985
 
       const fadeOut = 1 - clamp((abstractT - 0.12) / 0.22, 0, 1)
-      coreMat.opacity = (0.05 + anim * 0.55) * fadeOut
-      coreMesh.scale.setScalar(0.42 + anim * 1.05)
-      spriteMat.opacity = (0.02 + anim * 0.28) * fadeOut
-      glow.scale.setScalar(1.1 + anim * 2.4)
-      light.intensity = (0.35 + anim * 5.5) * fadeOut
-      light.distance = 5 + anim * 6
+      const glow = anim * fadeOut
+      coreMat.uniforms.uGlow.value = glow
+      coreMesh.scale.setScalar(0.48 + glow * 0.85)
+      glowLayers.forEach((layer, index) => {
+        const weight = index === 0 ? 0.32 : index === 1 ? 0.16 : 0.07
+        layer.material.opacity = glow * weight
+        layer.sprite.scale.setScalar(layer.scale * (0.8 + glow * 0.35))
+      })
+      light.intensity = (0.08 + glow * 2.4) * fadeOut
+      light.distance = 3.5 + glow * 3.5
       ;(contact.material as MeshBasicMaterial).opacity = (1 - smoother(anim)) * fadeOut
 
       for (const piece of pieces) {
-        const start = (ROW_START[piece.row] ?? 0.64) + piece.delay
-        const t = smoother(clamp((anim - start) / ROW_DURATION, 0, 1))
+        const t = clamp((anim - piece.delay) / Math.max(0.001, 1 - piece.delay), 0, 1)
         piece.mesh.position.copy(piece.basePos)
-        piece.mesh.position.addScaledVector(piece.radial, t ** 1.55 * piece.outDist)
-        piece.mesh.position.y += Math.sin(t * Math.PI) * piece.arc + t ** 0.8 * piece.lift
-        piece.mesh.position.addScaledVector(piece.tangent, t ** 1.3 * piece.side)
-        spin.setFromAxisAngle(piece.axis, t ** 1.2 * piece.spin)
+        piece.mesh.position.addScaledVector(piece.radial, t * piece.outDist)
+        piece.mesh.position.y += t * piece.lift
+        piece.mesh.position.x += Math.sin(time * 0.31 + piece.phase) * 0.018 * t
+        piece.mesh.position.y += Math.sin(time * 0.42 + piece.phase * 1.3) * 0.028 * t
+        piece.mesh.position.z += Math.cos(time * 0.27 + piece.phase) * 0.016 * t
+        spin.setFromAxisAngle(piece.axis, t * piece.spin)
         piece.mesh.quaternion.copy(spin).multiply(piece.baseQuat)
       }
     },
@@ -293,15 +320,9 @@ export async function loadIgloo(
       target.copy(core).applyMatrix4(group.matrixWorld)
     },
     readout(anim) {
-      if (anim <= 0.001) return 'HOLD'
-      if (anim >= 0.995) return 'OPEN'
-      for (let row = 5; row >= 0; row -= 1) {
-        const start = ROW_START[row] ?? 1
-        if (anim >= start && anim < start + ROW_DURATION + 0.06) {
-          return row >= 4 ? `ROW 0${row}  CROWN` : `ROW 0${row}`
-        }
-      }
-      return 'LIFT'
+      if (anim <= 0.02) return 'HOLD'
+      if (anim >= 0.98) return 'OPEN'
+      return 'APART'
     },
   }
 }
