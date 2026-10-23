@@ -6,6 +6,7 @@ import {
   CanvasTexture,
   Float32BufferAttribute,
   Group,
+  Line,
   LineBasicMaterial,
   LineSegments,
   Mesh,
@@ -28,19 +29,19 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import dracoWasm from 'three/examples/jsm/libs/draco/gltf/draco_decoder.wasm?url'
 import dracoWrapper from 'three/examples/jsm/libs/draco/gltf/draco_wasm_wrapper.js?url'
 import { brand } from './brand'
-import { createBlockMaterial, NOISE, type BlockUniforms } from './ice'
+import { createBlockMaterial, type BlockUniforms } from './ice'
 import { clamp, hash01, hashString, smoother } from './math'
 import type { Quality } from './quality'
 
 const YAW = -0.42
 
 const LABEL_OFFSETS: Array<[number, number]> = [
-  [-86, -52],
-  [18, -78],
-  [92, -28],
-  [-104, 12],
-  [74, 28],
-  [118, 48],
+  [-58, -34],
+  [22, -46],
+  [64, -16],
+  [-72, 18],
+  [46, 28],
+  [78, 42],
 ]
 
 export type LabelAnchor = {
@@ -108,7 +109,7 @@ function buildGuides(center: Vector3) {
     new LineBasicMaterial({
       color: '#eef3f6',
       transparent: true,
-      opacity: 0.42,
+      opacity: 0.2,
       fog: false,
       toneMapped: false,
     }),
@@ -128,7 +129,7 @@ function buildGuides(center: Vector3) {
       size: 2.2,
       sizeAttenuation: false,
       transparent: true,
-      opacity: 0.7,
+      opacity: 0.4,
       fog: false,
       toneMapped: false,
     }),
@@ -137,59 +138,43 @@ function buildGuides(center: Vector3) {
   return root
 }
 
-function asMesh(object: Object3D): object is Mesh {
-  return (object as Mesh).isMesh === true
+function buildSilhouette(center: Vector3, radius: number) {
+  const root = new Group()
+  const material = new LineBasicMaterial({
+    color: '#eef3f6',
+    transparent: true,
+    opacity: 0.5,
+    fog: false,
+    toneMapped: false,
+  })
+  const rings = [0.18, 0.42, 0.66, 0.84, 0.96]
+  for (const height of rings) {
+    const y = center.y - radius * 0.42 + height * radius * 1.25
+    const ring = Math.sqrt(Math.max(0.04, 1 - height * height)) * radius * 1.02
+    const points: Vector3[] = []
+    const steps = 72
+    for (let i = 0; i <= steps; i += 1) {
+      const angle = (i / steps) * Math.PI * 2
+      points.push(new Vector3(center.x + Math.cos(angle) * ring, y, center.z + Math.sin(angle) * ring * 0.9))
+    }
+    root.add(new Line(new BufferGeometry().setFromPoints(points), material))
+  }
+  for (const yaw of [0.35, 1.55, 2.7, 4.1]) {
+    const points: Vector3[] = []
+    const steps = 28
+    for (let i = 0; i <= steps; i += 1) {
+      const t = (i / steps) * Math.PI
+      const ring = Math.sin(t) * radius * 1.02
+      const y = center.y - radius * 0.42 + (1 - Math.cos(t)) * radius * 0.62
+      points.push(new Vector3(center.x + Math.cos(yaw) * ring, y, center.z + Math.sin(yaw) * ring * 0.9))
+    }
+    root.add(new Line(new BufferGeometry().setFromPoints(points), material))
+  }
+  return root
 }
 
-function wireMaterial(solid: { value: number }, dissolve: { value: number }) {
-  const material = new ShaderMaterial({
-    toneMapped: false,
-    transparent: true,
-    depthWrite: false,
-    fog: false,
-    polygonOffset: true,
-    polygonOffsetFactor: -2,
-    polygonOffsetUnits: -2,
-    uniforms: { uSolid: solid, uDissolve: dissolve },
-    vertexShader: /* glsl */ `
-      varying vec3 vWPos;
-      varying vec3 vN;
-      varying vec3 vV;
-      void main() {
-        vec4 world = modelMatrix * vec4(position, 1.0);
-        vec4 view = viewMatrix * world;
-        vWPos = world.xyz;
-        vN = normalize(mat3(modelViewMatrix) * normal);
-        vV = normalize(-view.xyz);
-        gl_Position = projectionMatrix * view;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      varying vec3 vWPos;
-      varying vec3 vN;
-      varying vec3 vV;
-      uniform float uSolid;
-      uniform float uDissolve;
-      ${NOISE}
-      void main() {
-        float n = blNoise(vWPos * 1.7);
-        if (n < uSolid) discard;
-        if (uDissolve > 0.001) {
-          float dn = blNoise(vWPos * 3.1 + vec3(0.0, uDissolve * 1.4, 0.0));
-          if (dn < uDissolve) discard;
-        }
-        vec3 face = normalize(cross(dFdx(vWPos), dFdy(vWPos)));
-        float crease = length(fwidth(face));
-        float grazing = abs(dot(normalize(vN), normalize(vV)));
-        float seam = smoothstep(0.06, 0.28, crease);
-        float silhouette = smoothstep(0.05, 0.012, grazing);
-        float line = max(seam, silhouette);
-        if (line < 0.25) discard;
-        gl_FragColor = vec4(0.94, 0.96, 0.98, line * 0.55);
-      }
-    `,
-  })
-  return material
+function asMesh(object: Object3D): object is Mesh {
+  return (object as Mesh).isMesh === true
 }
 
 export async function loadIgloo(
@@ -209,7 +194,6 @@ export async function loadIgloo(
   onProgress(0.96)
 
   const { material, uniforms } = createBlockMaterial(quality)
-  const wires = wireMaterial(uniforms.uSolid, uniforms.uDissolve)
   const group = gltf.scene
   group.rotation.y = YAW
 
@@ -253,22 +237,11 @@ export async function loadIgloo(
       delay: 0,
       outDist: 0,
       lift: 0,
-      spin: ((2 + hash01(hash * 4.4) * 4) * Math.PI) / 180 * (hash > 0.5 ? 1 : -1),
+      spin: ((1.2 + hash01(hash * 4.4) * 2.4) * Math.PI) / 180 * (hash > 0.5 ? 1 : -1),
       phase: hash01(hash * 9.1) * Math.PI * 2,
       tag: '',
     })
   })
-
-  const wireMeshes: Mesh[] = []
-  for (const piece of pieces) {
-    const wire = new Mesh(piece.mesh.geometry, wires)
-    wire.castShadow = false
-    wire.receiveShadow = false
-    wire.frustumCulled = false
-    wire.renderOrder = 3
-    piece.mesh.add(wire)
-    wireMeshes.push(wire)
-  }
 
   const shell = pieces.filter((piece) => !piece.tunnel)
   const core = new Vector3()
@@ -283,10 +256,10 @@ export async function loadIgloo(
     if (piece.radial.lengthSq() < 0.04) piece.radial.set(0, 1, 0)
     else piece.radial.normalize()
     const lead = piece.row >= 4 || piece.tunnel
-    const rowSpan = lead ? 0.48 : 0.25 + piece.row * 0.05
-    const jitter = hash01(hashString(piece.mesh.name || 'piece') * 1.7) * (lead ? 0.1 : 0.06)
-    piece.outDist = radius * Math.min(0.6, rowSpan + jitter)
-    piece.lift = radius * (0.018 + Math.min(piece.row, 4) * 0.012)
+    const rowSpan = lead ? 0.22 : 0.1 + piece.row * 0.028
+    const jitter = hash01(hashString(piece.mesh.name || 'piece') * 1.7) * 0.04
+    piece.outDist = radius * Math.min(0.3, Math.max(0.1, rowSpan + jitter))
+    piece.lift = radius * (0.004 + Math.min(piece.row, 4) * 0.003)
     const rowLag = lead ? hash01(hashString(piece.mesh.name) * 3.3) * 0.05 : 0.05 + (4 - Math.min(piece.row, 4)) * 0.035
     piece.delay = Math.min(0.22, rowLag)
   }
@@ -314,6 +287,8 @@ export async function loadIgloo(
   group.add(contact)
 
   const guides = buildGuides(core)
+  const silhouette = buildSilhouette(core, radius)
+  guides.add(silhouette)
   group.add(guides)
 
   const coreMat = new ShaderMaterial({
@@ -369,7 +344,7 @@ export async function loadIgloo(
     return { sprite, material: spriteMat, scale }
   })
 
-  const light = new PointLight('#fff6ee', 0, 8, 1.4)
+  const light = new PointLight('#f4f8ff', 2.2, 9, 1.6)
   light.position.copy(core)
   group.add(light)
 
@@ -391,20 +366,18 @@ export async function loadIgloo(
       uniforms.uSolid.value = solid
       uniforms.uDissolve.value = dissolve
       group.visible = dissolve < 0.985
-      const showWire = solid < 0.992 && dissolve < 0.98
-      for (const wire of wireMeshes) wire.visible = showWire
-      guides.visible = solid < 0.45 && dissolve < 0.2
+      guides.visible = solid < 0.42 && dissolve < 0.2
 
-      const glow = burst * burst * (1 - smoother(dissolve))
-      coreMat.uniforms.uGlow.value = glow * 0.72
-      coreMesh.scale.setScalar(0.62 + glow * 0.55)
+      const glow = (0.45 + burst * 0.55) * (1 - smoother(dissolve))
+      coreMat.uniforms.uGlow.value = glow
+      coreMesh.scale.setScalar(0.55 + glow * 0.7)
       glowLayers.forEach((layer, index) => {
         const weight = index === 0 ? 0.34 : index === 1 ? 0.16 : 0.07
         layer.material.opacity = glow * weight
         layer.sprite.scale.setScalar(layer.scale * (0.7 + glow * 0.45))
       })
-      light.intensity = glow * 2.6
-      light.distance = 2.8 + glow * 3.4
+      light.intensity = 2.4 + glow * 16
+      light.distance = 6.5 + glow * 2.5
       ;(contact.material as MeshBasicMaterial).opacity = (1 - smoother(burst)) * solid * (1 - dissolve)
 
       for (const piece of pieces) {
@@ -428,10 +401,8 @@ export async function loadIgloo(
         const slot = target[i]
         if (!piece || !slot) continue
         slot.position.copy(piece.localCenter).applyMatrix4(piece.mesh.matrixWorld)
-        const x = slot.position.x
-        const y = slot.position.y
-        slot.text = `${piece.tag}  ${signed(x)}  ${signed(y)}`
-        slot.bent = false
+        slot.text = piece.tag
+        slot.bent = true
       }
     },
     readout(burst, solid) {
@@ -443,16 +414,11 @@ export async function loadIgloo(
   }
 }
 
-function signed(value: number) {
-  const text = Math.abs(value).toFixed(1)
-  return value >= 0 ? `+${text}` : `-${text}`
-}
-
 function pickLabels(pieces: Piece[]) {
   const chosen: Piece[] = []
   for (const row of [5, 4, 3, 2, 1]) {
     const pool = pieces.filter((piece) => !piece.tunnel && piece.row === row)
-    pool.sort((a, b) => b.localCenter.z - a.localCenter.z)
+    pool.sort((a, b) => b.localCenter.x + b.localCenter.z - (a.localCenter.x + a.localCenter.z))
     const piece = pool[0]
     if (piece) chosen.push(piece)
   }

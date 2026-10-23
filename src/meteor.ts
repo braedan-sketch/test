@@ -1,5 +1,6 @@
 import {
   AdditiveBlending,
+  Box3,
   CanvasTexture,
   Color,
   Group,
@@ -17,6 +18,7 @@ import {
   Vector3,
 } from 'three'
 import { brand } from './brand'
+import { fitHero, loadHero } from './heroModel'
 import type { LabelAnchor } from './igloo'
 import type { Quality } from './quality'
 
@@ -90,7 +92,7 @@ function glowTexture() {
   return map
 }
 
-export function createMeteor(quality: Quality): Meteor {
+export async function createMeteor(quality: Quality): Promise<Meteor> {
   const geometry = new IcosahedronGeometry(1, quality.low ? 2 : 3)
   const position = geometry.attributes.position
   if (!position) throw new Error('Crystal is missing positions')
@@ -171,7 +173,14 @@ export function createMeteor(quality: Quality): Meteor {
   const light = new PointLight('#fff6f0', 4.2, 8, 1.5)
   group.add(light)
 
-  const anchors = pickAnchors(position)
+  let anchors = pickAnchors(position)
+  const hero = await loadHero('/models/crystal.glb')
+  if (hero) {
+    crystal.visible = false
+    fitHero(hero, 2.5)
+    group.add(hero)
+    anchors = boxAnchors(hero)
+  }
 
   return {
     group,
@@ -197,6 +206,17 @@ export function createMeteor(quality: Quality): Meteor {
       }
     },
   }
+}
+
+function boxAnchors(root: Group) {
+  const box = new Box3().setFromObject(root)
+  const center = box.getCenter(new Vector3())
+  return [
+    new Vector3(box.max.x, center.y, center.z),
+    new Vector3(center.x, box.min.y, center.z),
+    new Vector3(center.x, center.y, box.max.z),
+    new Vector3(box.max.x, box.max.y, box.max.z),
+  ]
 }
 
 function pickAnchors(position: {

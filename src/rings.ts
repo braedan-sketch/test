@@ -13,6 +13,7 @@ import {
   CanvasTexture,
   SRGBColorSpace,
 } from 'three'
+import { fitHero, loadHero } from './heroModel'
 import type { Quality } from './quality'
 
 export type Rings = {
@@ -20,7 +21,7 @@ export type Rings = {
   update: (spin: number, shown: number) => void
 }
 
-export function createRings(quality: Quality): Rings {
+export async function createRings(quality: Quality): Promise<Rings> {
   const material = new MeshPhysicalMaterial({
     color: new Color('#c5d5e2'),
     roughness: 0.08,
@@ -106,12 +107,21 @@ export function createRings(quality: Quality): Rings {
     }
   }
 
+  const hero = await loadHero('/models/rings.glb')
+  if (hero) {
+    for (const band of bands) band.group.visible = false
+    core.visible = false
+    fitHero(hero, 4.8)
+    root.add(hero)
+  }
+
   return {
     group: root,
     update(spin, shown) {
       const visible = shown > 0.02
       root.visible = visible
       root.scale.setScalar(0.92 + shown * 0.08)
+      if (hero) hero.rotation.y = spin * Math.PI * 2 * 0.18
       for (const band of bands) {
         band.group.rotation.y = spin * Math.PI * 2 * band.speed
       }

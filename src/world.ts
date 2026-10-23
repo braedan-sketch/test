@@ -17,7 +17,7 @@ import {
 import { lerp } from './math'
 import type { Quality } from './quality'
 
-const FIELD = new Color('#b7bcc0')
+const FIELD = new Color('#8fa3b0')
 const VOID = new Color('#6d757b')
 const RINGS = new Color('#8e9499')
 const FIGURE = new Color('#3e484e')
@@ -48,8 +48,9 @@ export function sampleHeight(x: number, z: number) {
     height += rim - bowl
   }
   const ridge = smoothRidge(radius) * (1.5 + Math.sin(x * 0.11) * 0.7 + Math.cos(z * 0.09) * 0.65)
-  const pad = Math.exp(-radius * radius * 0.055)
-  return (height + ridge) * (1 - pad * 0.94)
+  const pad = Math.exp(-radius * radius * 0.035)
+  const slope = (x * 0.045 - z * 0.018) * (1 - pad)
+  return (height + ridge) * (1 - pad * 0.7) + slope
 }
 
 function smoothRidge(radius: number) {
@@ -98,10 +99,10 @@ export function createWorld(scene: Scene, quality: Quality): World {
         `#include <color_fragment>
         float rock = sin(vRock.x * 0.17) * cos(vRock.z * 0.13);
         float snow = smoothstep(-0.2, 1.4, vRock.y + rock * 0.35);
-        diffuseColor.rgb = mix(vec3(0.32, 0.35, 0.37), vec3(0.62, 0.66, 0.68), 0.45 + rock * 0.2);
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.84, 0.87, 0.89), snow * 0.75);
-        float pit = smoothstep(0.25, -0.55, vRock.y);
-        diffuseColor.rgb *= mix(1.0, 0.48, pit);`,
+        diffuseColor.rgb = mix(vec3(0.16, 0.18, 0.21), vec3(0.28, 0.31, 0.34), 0.45 + rock * 0.3);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.36, 0.40, 0.44), snow * 0.84);
+        float pit = smoothstep(0.4, -0.35, vRock.y);
+        diffuseColor.rgb *= mix(1.0, 0.55, pit);`,
       )
   }
   const terrain = new Mesh(geometry, terrainMat)
@@ -159,10 +160,10 @@ function buildSky() {
       void main() {
         vec3 d = normalize(vDir);
         float h = d.y;
-        vec3 field = mix(vec3(0.55, 0.59, 0.63), vec3(0.80, 0.83, 0.86), smoothstep(-0.02, 0.72, h));
-        float ridge = sin(atan(d.z, d.x) * 5.0) * 0.45 + sin(atan(d.z, d.x) * 11.0 + 1.2) * 0.28;
-        float peaks = smoothstep(0.18 + ridge * 0.08, 0.01, h);
-        field = mix(field, vec3(0.40, 0.45, 0.50), peaks * (1.0 - smoothstep(0.15, 1.15, uMood)));
+        vec3 field = mix(vec3(0.16, 0.19, 0.24), vec3(0.24, 0.28, 0.34), smoothstep(-0.04, 0.55, h));
+        float ridge = sin(atan(d.z, d.x) * 5.0) * 0.5 + sin(atan(d.z, d.x) * 11.0 + 1.2) * 0.32;
+        float peaks = smoothstep(0.38 + ridge * 0.08, 0.04, h);
+        field = mix(field, vec3(0.32, 0.36, 0.42), peaks * (1.0 - smoothstep(0.2, 1.2, uMood)) * 0.88);
         vec3 voidCol = vec3(0.55, 0.58, 0.62);
         float grid = 0.0;
         if (uMood > 0.45 && uMood < 1.6) {
@@ -231,7 +232,7 @@ function fogColor(mood: number) {
 }
 
 function fogDensity(mood: number) {
-  if (mood <= 1) return lerp(0.016, 0.01, mood)
+  if (mood <= 1) return lerp(0.012, 0.008, mood)
   if (mood <= 2) return lerp(0.012, 0.004, mood - 1)
   return lerp(0.004, 0.026, Math.min(1, mood - 2))
 }

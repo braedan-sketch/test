@@ -10,6 +10,7 @@ import {
   ShaderMaterial,
   TorusGeometry,
 } from 'three'
+import { fitHero, loadHero } from './heroModel'
 import type { Quality } from './quality'
 
 export type Figure = {
@@ -24,7 +25,7 @@ type Surf = { pos: number[]; idx: number[] }
  * The mesh is a lofted surface (body, neck, skull, snout, tail, legs, ears)
  * so the silhouette stays a fox instead of a stack of blobs.
  */
-export function createFigure(quality: Quality): Figure {
+export async function createFigure(quality: Quality): Promise<Figure> {
   const count = quality.points
   const rand = mulberry(11)
   const surf = buildFox()
@@ -129,6 +130,13 @@ export function createFigure(quality: Quality): Figure {
   glow.rotation.x = Math.PI / 2
   glow.position.y = 0.01
   root.add(disc, inner, glow)
+
+  const hero = await loadHero('/models/fox.glb')
+  if (hero) {
+    points.visible = false
+    fitHero(hero, 1.72, 'floor')
+    root.add(hero)
+  }
 
   return {
     group: root,

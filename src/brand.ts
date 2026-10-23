@@ -59,7 +59,7 @@ export const brand = {
     body: 'An arctic fox, held in points above a ring. Then the sand lifts.',
     contact: 'Write to the studio',
   },
-  hud: ['CRN', 'SLB', 'CRS', 'BLK', 'LNT', 'ENT'],
+  hud: ['21', '22', '23', '24', '28', '19'],
   meteorHud: ['MASS  2.41', 'CORE  0.08', 'RIM  11.6', 'FACE  4.02'],
   links: [
     { label: 'Field desk', value: 'hello@blendy.studio' },
