@@ -1,6 +1,7 @@
 import {
   AdditiveBlending,
   Box3,
+  BoxGeometry,
   BufferGeometry,
   CanvasTexture,
   Color,
@@ -12,7 +13,6 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshPhysicalMaterial,
-  MeshStandardMaterial,
   PlaneGeometry,
   PMREMGenerator,
   PointLight,
@@ -52,11 +52,18 @@ export type Meteor = {
   labelCount: number
 }
 
+/**
+ * Opaque dotted card behind the shard. Transmission only refracts opaque
+ * scene geometry, so a DOM or discarded-dot backdrop stays flat.
+ * Colors match the meteor sky so the card does not read as a separate panel.
+ */
 function buildDotField() {
   const mesh = new Mesh(
-    new PlaneGeometry(42, 56),
+    new PlaneGeometry(36, 48),
     new ShaderMaterial({
-      depthWrite: false,
+      depthWrite: true,
+      fog: false,
+      toneMapped: false,
       uniforms: {},
       vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -68,16 +75,21 @@ function buildDotField() {
       fragmentShader: /* glsl */ `
         varying vec2 vUv;
         void main() {
-          vec2 cell = abs(fract(vUv * vec2(36.0, 48.0)) - 0.5);
-          float dot = 1.0 - smoothstep(0.07, 0.13, length(cell));
-          if (dot < 0.25) discard;
-          gl_FragColor = vec4(vec3(0.22, 0.24, 0.27), dot * 0.9);
+          vec2 cell = abs(fract(vUv * vec2(62.0, 82.0)) - 0.5);
+          float dot = 1.0 - smoothstep(0.07, 0.14, length(cell));
+          vec3 paper = vec3(0.58, 0.59, 0.61);
+          vec3 ink = vec3(0.28, 0.30, 0.33);
+          gl_FragColor = vec4(mix(paper, ink, dot * 0.85), 1.0);
         }
       `,
-      transparent: true,
     }),
   )
-  mesh.position.set(0, 0.2, -7.5)
+  mesh.name = 'dot-backdrop'
+  // Camera sits on +CRYSTAL_DIR. Face it, a few units behind the shard.
+  const away = new Vector3(0.22, 0.04, 1).normalize()
+  mesh.position.copy(away).multiplyScalar(-4.2)
+  mesh.lookAt(0, 0, 0)
+  mesh.frustumCulled = false
   return mesh
 }
 
@@ -174,7 +186,8 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
 
   const group = new Group()
   group.position.copy(CENTER)
-  group.add(crystal, buildDotField(), buildStreaks())
+  const dots = buildDotField()
+  group.add(crystal, dots, buildStreaks())
 
   const core = new Mesh(
     new SphereGeometry(0.05, 16, 12),
@@ -205,7 +218,8 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
     group.add(sprite)
   }
 
-  const light = new PointLight('#fff6f0', 4.2, 8, 1.5)
+  const light = new PointLight('#ffffff', 28, 18, 2)
+  light.position.set(1.35, 2.15, 3.15)
   group.add(light)
 
   let anchors = pickAnchors(position)
@@ -228,20 +242,19 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
       const roughnessMap = maps.roughnessMap ?? null
       if (envMap) {
         const physical = new MeshPhysicalMaterial({
-          color: new Color('#f4f8fb'),
+          color: new Color('#ffffff'),
           roughness: 0.08,
           metalness: 0,
           transmission: 1,
-          thickness: 1.2,
+          thickness: 0.6,
           ior: 1.45,
           iridescence: 0.6,
           iridescenceIOR: 1.3,
-          attenuationColor: new Color('#8aa4b8'),
-          attenuationDistance: 0.8,
+          attenuationColor: new Color('#c9d6e0'),
+          attenuationDistance: 3,
           envMap,
-          envMapIntensity: 1.4,
+          envMapIntensity: 2,
           normalMap,
-          roughnessMap,
         })
         if (maps.normalScale) physical.normalScale.copy(maps.normalScale)
         mesh.material = physical
@@ -261,18 +274,25 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
       }
     })
     fitHero(hero, 2.15)
-    const heart = new Mesh(
-      new SphereGeometry(0.16, 24, 16),
-      new MeshStandardMaterial({
-        color: '#12181e',
-        emissive: '#243240',
-        emissiveIntensity: 0.8,
-        roughness: 0.45,
-        metalness: 0,
-      }),
-    )
-    heart.name = 'crystal-core'
-    hero.add(heart)
+    const glowMap = glowTexture()
+    if (glowMap) {
+      const inner = new Sprite(
+        new SpriteMaterial({
+          map: glowMap,
+          color: '#f4f8fb',
+          transparent: true,
+          opacity: 0.15,
+          blending: AdditiveBlending,
+          depthWrite: false,
+          depthTest: false,
+          toneMapped: false,
+        }),
+      )
+      inner.name = 'crystal-glow'
+      inner.scale.setScalar(0.72)
+      inner.renderOrder = 2
+      hero.add(inner)
+    }
     hero.rotation.y = 0.55
     group.add(hero)
     anchors = boxAnchors(hero)
@@ -289,7 +309,8 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
         hero.rotation.y = 0.55 + time * 0.22
         hero.rotation.z = Math.sin(time * 0.17) * 0.08
       }
-      light.intensity = 1.4 + shown * 2.4
+      light.intensity = 16 + shown * 44
+      dots.visible = shown > 0.8
       if (sprite && sprite.visible) sprite.material.opacity = 0.16 + shown * 0.2
     },
     fillLabels(target) {
@@ -310,6 +331,19 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
 
 function studioRoom(renderer: WebGLRenderer) {
   const room = new RoomEnvironment()
+  // Hard rect lights so the ice catches a few white edges, not a flat studio wash.
+  const strips: Array<[number, number, number, number, number, number, number]> = [
+    [7.2, 15.5, 9.4, 0.45, 6.4, 0.35, 36],
+    [-5.4, 19.2, 4.6, 9.5, 0.32, 0.28, 22],
+    [1.4, 7.2, 13.6, 4.2, 0.4, 0.22, 42],
+  ]
+  for (const [x, y, z, sx, sy, sz, intensity] of strips) {
+    const material = new MeshBasicMaterial({ toneMapped: false })
+    material.color.setRGB(intensity, intensity, intensity)
+    const strip = new Mesh(new BoxGeometry(sx, sy, sz), material)
+    strip.position.set(x, y, z)
+    room.add(strip)
+  }
   const pmrem = new PMREMGenerator(renderer)
   const texture = pmrem.fromScene(room, 0.04).texture
   pmrem.dispose()

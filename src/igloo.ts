@@ -216,7 +216,7 @@ function prepareBakedMaterial(root: Object3D, uniforms: BlockUniforms) {
   material.toneMapped = false
   if (material.map) material.map.colorSpace = SRGBColorSpace
   material.fog = true
-  material.customProgramCacheKey = () => 'blendy-baked-igloo-v4'
+  material.customProgramCacheKey = () => 'blendy-baked-igloo-v5'
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uSolid = uniforms.uSolid
     shader.uniforms.uDissolve = uniforms.uDissolve
@@ -243,6 +243,7 @@ function prepareBakedMaterial(root: Object3D, uniforms: BlockUniforms) {
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
+        if (uSolid < 0.04 && uDissolve < 0.2) discard;
         if (uSolid < 0.999 && vSeed > uSolid) discard;
         if (uDissolve > 0.001 && vSeed < uDissolve) discard;
         float luma = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
@@ -388,27 +389,34 @@ export async function loadIgloo(
     color: 0xffffff,
     linewidth: 1.2,
     transparent: true,
-    opacity: 0.85,
+    opacity: 1,
     depthTest: true,
     depthWrite: false,
     worldUnits: false,
   })
   edgeMat.toneMapped = false
-  // Depth-only shell, pushed back so the course lines stay visible and the far bricks don't.
+  // Depth only. Scaled about 2% toward each brick's centre so front edges win the depth test.
   const depthMat = new MeshBasicMaterial({
     colorWrite: false,
     depthWrite: true,
     fog: false,
     toneMapped: false,
     polygonOffset: true,
-    polygonOffsetFactor: 2,
-    polygonOffsetUnits: 2,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
   })
   const depthMeshes: Mesh[] = []
+  const brickCenter = new Box3()
   for (const piece of pieces) {
     const depth = new Mesh(piece.mesh.geometry, depthMat)
     depth.name = 'brick-depth'
     depth.frustumCulled = false
+    const position = piece.mesh.geometry.getAttribute('position')
+    if (position instanceof BufferAttribute) {
+      brickCenter.setFromBufferAttribute(position)
+      depth.scale.setScalar(0.98)
+      depth.position.copy(brickCenter.getCenter(new Vector3())).multiplyScalar(0.02)
+    }
     piece.mesh.add(depth)
     depthMeshes.push(depth)
     const course = brickEdges(piece)
@@ -532,7 +540,12 @@ export async function loadIgloo(
       guides.visible = false
       const showDepth = solid < 0.04 && dissolve < 0.2
       for (const depth of depthMeshes) depth.visible = showDepth
-      edgeMat.opacity = (1 - smoother(Math.min(1, solid * 1.4))) * (1 - smoother(dissolve)) * 0.85
+      const faceMat = bakedMaterial ?? procedural?.material ?? null
+      if (faceMat) {
+        faceMat.colorWrite = !showDepth
+        faceMat.depthWrite = !showDepth
+      }
+      edgeMat.opacity = (1 - smoother(Math.min(1, solid * 1.4))) * (1 - smoother(dissolve))
 
       const open = burst * (1 - smoother(dissolve))
       const presence = (1 - smoother(dissolve)) * solid
