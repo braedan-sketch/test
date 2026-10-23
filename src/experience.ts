@@ -59,8 +59,8 @@ declare global {
 }
 
 // Dome center after the group yaw and the ground lift. Overhead shot uses the footprint.
-const DOME_TARGET: readonly [number, number, number] = [0.5, 2.15, 1.35]
-const DOME_DIR: readonly [number, number, number] = [0.04, 1, 0.07]
+const DOME_TARGET: readonly [number, number, number] = [0.55, 1.7, 1.25]
+const DOME_DIR: readonly [number, number, number] = [0.62, 0.95, 1.05]
 // Dome center. Direction is about 6° down so the camera sits low and close.
 const EYE_TARGET: readonly [number, number, number] = [0.02, 3.05, 0.04]
 const EYE_DIR: readonly [number, number, number] = [0.42, 0.17, 1.5]
@@ -298,7 +298,7 @@ export async function startExperience(overlay: Overlay) {
         phase.screen === 'field' || phase.screen === 'rift' ? 0.28 : phase.screen === 'meteor' ? 1.15 : 0.85
 
       igloo?.update(phase.burst, phase.solid, phase.dissolve, reducedMotion ? 0 : now / 1000)
-      meteor.update(phase.meteorReveal)
+      meteor.update(phase.meteorReveal, reducedMotion ? 0 : now / 1000)
       rings.update(phase.ringsT, phase.ringsShown)
       figure.update(phase.figureAppear, phase.figureBlow, reducedMotion ? 0 : now / 1000, dpr)
 
@@ -477,16 +477,12 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
   let fov = 40
   if (phase.screen === 'field' || (phase.screen === 'rift' && phase.riftT < 0.02)) {
     fov = 40
-    // Stay overhead through the wire hold. The eye pose is already fully in by the solid frame.
+    // Wire hold is a 3/4 view, about 40° down. The eye pose is fully in by the solid frame.
     const dolly = smoother(clamp((phase.fieldT - 0.08) / 0.16, 0, 1))
     mix3(target, DOME_TARGET, EYE_TARGET, dolly)
-    // Looking down the Y axis: world up is parallel to the view, which throws the dome into a corner.
-    up.set(0, dolly, -(1 - dolly))
-    if (up.lengthSq() < 1e-6) up.set(0, 1, 0)
-    else up.normalize()
-    // Wire dome, about half the frame width, on the ground grid.
-    const wireFillW = aspect < 1 ? 0.58 : 0.4
-    const dHigh = fitBox(4.2, 3.2, wireFillW, 0.85, aspect, fov)
+    up.set(0, 1, 0)
+    const wireFillW = aspect < 1 ? 0.62 : 0.5
+    const dHigh = fitBox(4.6, 3.4, wireFillW, 0.55, aspect, fov)
     // Visual mass, not the inflated bounds. Portrait ~83% of the width, desktop ~50% of the height.
     const span = phase.burst
     const dEye = fitBox(lerp(4.15, 4.75, span), lerp(2.07, 2.7, span), 0.83, 0.5, aspect, fov)

@@ -13,8 +13,10 @@ import {
   TorusGeometry,
   CanvasTexture,
   SRGBColorSpace,
+  Texture,
   Vector3,
 } from 'three'
+import { createGlassMaterial } from './glass'
 import { fitHero, loadHero } from './heroModel'
 import type { Quality } from './quality'
 
@@ -117,21 +119,16 @@ export async function createRings(quality: Quality): Promise<Rings> {
     core.visible = false
     hero.traverse((object) => {
       const mesh = object as Mesh
-      if (!mesh.isMesh || !mesh.material) return
-      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-      for (const material of materials) {
-        if (!('color' in material) || !(material.color instanceof Color)) continue
-        material.color.set('#ffffff')
-        if ('emissive' in material && material.emissive instanceof Color) material.emissive.set('#ffffff')
-        if ('emissiveIntensity' in material) material.emissiveIntensity = 1.6
-        if ('roughness' in material) material.roughness = 0.16
-        if ('metalness' in material) material.metalness = 0
-        if ('transmission' in material) material.transmission = 0
-        if ('transparent' in material) material.transparent = false
-        if ('opacity' in material) material.opacity = 1
-        if ('envMapIntensity' in material) material.envMapIntensity = 0.35
-        material.toneMapped = false
-      }
+      if (!mesh.isMesh) return
+      const source = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
+      const maps = source as { normalMap?: Texture | null; roughnessMap?: Texture | null }
+      const normalMap = maps.normalMap ?? null
+      const roughnessMap = maps.roughnessMap ?? null
+      mesh.material = createGlassMaterial({
+        normalMap: normalMap ?? null,
+        roughnessMap: roughnessMap ?? null,
+        kind: 'rings',
+      })
     })
     fitHero(hero, 4.6)
     hero.position.y = 0.2

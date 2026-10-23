@@ -30,6 +30,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import dracoWasm from 'three/examples/jsm/libs/draco/gltf/draco_decoder.wasm?url'
 import dracoWrapper from 'three/examples/jsm/libs/draco/gltf/draco_wasm_wrapper.js?url'
 import { brand } from './brand'
+import { publicUrl } from './heroModel'
 import { createBlockMaterial, type BlockUniforms } from './ice'
 import { clamp, hash01, hashString, smoother } from './math'
 import type { Quality } from './quality'
@@ -251,8 +252,10 @@ export async function loadIgloo(
   const loader = new GLTFLoader()
   loader.setDRACOLoader(draco)
 
-  const baked = await isGlb('/models/igloo_bricks_baked.glb')
-  const gltf = await loader.loadAsync(baked ? '/models/igloo_bricks_baked.glb' : '/models/igloo_bricks.glb', (event) => {
+  const bakedUrl = publicUrl('/models/igloo_bricks_baked.glb')
+  const brickUrl = publicUrl('/models/igloo_bricks.glb')
+  const baked = await isGlb(bakedUrl)
+  const gltf = await loader.loadAsync(baked ? bakedUrl : brickUrl, (event) => {
     if (event.total > 0) onProgress(0.08 + (event.loaded / event.total) * 0.84)
   })
   draco.dispose()

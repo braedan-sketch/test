@@ -361,10 +361,13 @@ body[data-screen='rift'] .sound {
   text-shadow: 0 1px 2px rgba(6, 10, 14, 0.55);
 }
 .stage[data-screen='meteor'] .sticky { justify-content: flex-end; }
-.stage[data-screen='figure'] .sticky { align-items: flex-end; }
+.stage[data-screen='figure'] .sticky {
+  align-items: flex-end;
+  padding-bottom: 2.5vh;
+}
 
 .copy { max-width: 360px; }
-.stage[data-screen='figure'] .copy { max-width: 460px; }
+.stage[data-screen='figure'] .copy { max-width: 420px; }
 
 .title {
   margin: 0;
@@ -376,7 +379,7 @@ body[data-screen='rift'] .sound {
 }
 
 .stage[data-screen='figure'] .title {
-  font-size: clamp(56px, 8vw, 112px);
+  font-size: clamp(28px, 3.4vw, 48px);
 }
 
 .body {
@@ -530,6 +533,22 @@ body[data-screen='meteor'] .tags {
   .sound { left: 16px; bottom: 16px; font-size: 10px; }
   .stage[data-screen='field'] .hint { left: 16px; bottom: 40px; font-size: 10px; }
   .sticky { padding: 22vh 6vw 14vh; }
+  .stage[data-screen='figure'] .sticky {
+    align-items: flex-end;
+    justify-content: center;
+    padding: 0 16px 12px;
+  }
+  .stage[data-screen='figure'] .copy {
+    max-width: 100%;
+    text-align: center;
+  }
+  .stage[data-screen='figure'] .title { font-size: 26px; }
+  .stage[data-screen='figure'] .body {
+    margin-top: 4px;
+    font-size: 11px;
+    line-height: 1.35;
+  }
+  .stage[data-screen='figure'] .contact { margin-top: 6px; font-size: 10px; }
   .stage[data-screen='meteor'] .sticky { justify-content: flex-start; }
   body[data-screen='figure'] .frame i:nth-child(1),
   body[data-screen='figure'] .frame i:nth-child(3) { left: 18px; }

@@ -19,10 +19,12 @@ import {
   Sprite,
   SpriteMaterial,
   SRGBColorSpace,
+  Texture,
   Vector3,
 } from 'three'
 import { brand } from './brand'
 import { hash01 } from './math'
+import { createGlassMaterial } from './glass'
 import { fitHero, loadHero } from './heroModel'
 import type { LabelAnchor } from './igloo'
 import type { Quality } from './quality'
@@ -40,7 +42,7 @@ export const meteorCenter = CENTER
 
 export type Meteor = {
   group: Group
-  update: (reveal: number) => void
+  update: (reveal: number, time: number) => void
   fillLabels: (target: LabelAnchor[]) => void
   labelCount: number
 }
@@ -205,13 +207,23 @@ export async function createMeteor(quality: Quality): Promise<Meteor> {
   const hero = await loadHero('/models/crystal.glb')
   if (hero) {
     crystal.visible = false
+    core.visible = false
+    if (sprite) sprite.visible = false
     hero.traverse((object) => {
       const mesh = object as Mesh
-      if (!mesh.isMesh || !mesh.material || !('envMapIntensity' in mesh.material)) return
-      mesh.material.envMapIntensity = 1.35
-      if (!quality.crystalTransmission && 'transmission' in mesh.material) mesh.material.transmission = 0
+      if (!mesh.isMesh) return
+      const source = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
+      const maps = source as { normalMap?: Texture | null; roughnessMap?: Texture | null }
+      const normalMap = maps.normalMap ?? null
+      const roughnessMap = maps.roughnessMap ?? null
+      mesh.material = createGlassMaterial({
+        normalMap: normalMap ?? null,
+        roughnessMap: roughnessMap ?? null,
+        kind: 'crystal',
+      })
     })
     fitHero(hero, 2.5)
+    hero.rotation.y = 0.55
     group.add(hero)
     anchors = boxAnchors(hero)
   }
@@ -219,12 +231,16 @@ export async function createMeteor(quality: Quality): Promise<Meteor> {
   return {
     group,
     labelCount: anchors.length,
-    update(reveal) {
+    update(reveal, time) {
       const shown = Math.max(0, Math.min(1, reveal))
       group.visible = shown > 0.02
       group.scale.setScalar(0.62 + shown * 0.38)
+      if (hero) {
+        hero.rotation.y = 0.55 + time * 0.22
+        hero.rotation.z = Math.sin(time * 0.17) * 0.08
+      }
       light.intensity = 1.4 + shown * 2.4
-      if (sprite) sprite.material.opacity = 0.16 + shown * 0.2
+      if (sprite && sprite.visible) sprite.material.opacity = 0.16 + shown * 0.2
     },
     fillLabels(target) {
       group.updateWorldMatrix(true, true)

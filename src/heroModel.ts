@@ -4,11 +4,18 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import dracoWasm from 'three/examples/jsm/libs/draco/gltf/draco_decoder.wasm?url'
 import dracoWrapper from 'three/examples/jsm/libs/draco/gltf/draco_wasm_wrapper.js?url'
 
+/** Asset URL that follows Vite's base, including `./` for a folder-relative build. */
+export function publicUrl(path: string) {
+  const base = import.meta.env.BASE_URL || './'
+  return `${base}${path.replace(/^\//, '')}`
+}
+
 /**
  * Load a hero GLB when the file exists. A missing file, or a file that fails
  * to parse, returns null so the scene can keep its procedural stand-in.
  */
 export async function loadHero(url: string): Promise<Group | null> {
+  url = publicUrl(url)
   try {
     const head = await fetch(url, { method: 'HEAD' })
     const type = head.headers.get('content-type') ?? ''
