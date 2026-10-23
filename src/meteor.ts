@@ -239,7 +239,6 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
         normalScale?: Vector2
       }
       const normalMap = maps.normalMap ?? null
-      const roughnessMap = maps.roughnessMap ?? null
       if (envMap) {
         const physical = new MeshPhysicalMaterial({
           color: new Color('#ffffff'),
@@ -256,12 +255,13 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
           envMapIntensity: 2,
           normalMap,
         })
-        if (maps.normalScale) physical.normalScale.copy(maps.normalScale)
+        // The baked normal is heavy and pits the faces. Keep a light chip only.
+        physical.normalScale.set(0.35, 0.35)
         mesh.material = physical
       } else {
         mesh.material = createGlassMaterial({
           normalMap,
-          roughnessMap,
+          roughnessMap: null,
           kind: 'crystal',
         })
       }

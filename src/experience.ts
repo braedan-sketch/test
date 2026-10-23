@@ -534,14 +534,14 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     const riftEye =
       aspect >= 1 ? desktopEyeDistance(4.75, 2.7, aspect, 40) : fitBox(4.75, 2.7, 0.83, 0.5, aspect, 40)
     placeAlong(scratchA, EYE_TARGET, EYE_DIR, riftEye)
-    placeAlong(scratchB, crystalTarget, CRYSTAL_DIR, fitBox(1.9, 2.55, 0.54, 0.46, aspect, fov))
+    placeAlong(scratchB, crystalTarget, CRYSTAL_DIR, crystalHold(aspect))
     const riftBlend = smoother(phase.riftT)
     mix3(target, EYE_TARGET, crystalTarget, riftBlend)
     pos.copy(scratchA).lerp(scratchB, riftBlend)
     if (aspect >= 1) aimSubjectRight(target, pos, 0.16 * (1 - riftBlend), aspect, 40)
   } else if (phase.screen === 'meteor') {
     fov = 34
-    const hold = fitBox(1.9, 2.55, 0.54, 0.46, aspect, fov)
+    const hold = crystalHold(aspect)
     target.set(meteorCenter.x, meteorCenter.y, meteorCenter.z)
     placeAlong(pos, [target.x, target.y, target.z], CRYSTAL_DIR, hold)
     const leave = smoother(clamp((phase.meteorT - 0.9) / 0.1, 0, 1))
@@ -733,6 +733,12 @@ function aimSubjectRight(look: Vector3, pos: Vector3, fraction: number, aspect: 
   const rz = dx / len
   look.x -= rx * shift
   look.z -= rz * shift
+}
+
+/** Fitted crystal_v2 is 2.15 tall and about 1.5 wide. Height sets the frame. */
+function crystalHold(aspect: number) {
+  const fillH = aspect >= 1 ? 0.45 : 0.4
+  return fitBox(1.5, 2.15, 0.8, fillH, aspect, 34)
 }
 
 function fitBox(width: number, height: number, fillW: number, fillH: number, aspect: number, fovDeg: number) {

@@ -106,8 +106,8 @@ export function createGlassMaterial(options: {
     toneMapped: false,
     uniforms: {
       ...shared,
-      // Tangent-space scale. Strong enough to chip a face, not to flip it.
-      uNormalScale: { value: 0.72 },
+      // The v2 normal map pits the faces if it is left at full strength.
+      uNormalScale: { value: 0.35 },
       uAbsorb: { value: new Color().setRGB(0.02, 0.024, 0.03) },
       uCore: { value: new Color().setRGB(0.26, 0.3, 0.34) },
       uIor: { value: 1.31 },
