@@ -392,7 +392,7 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
   }
 }
 
-/** Thin white rim plus a split R/G/B fresnel, only where the glass turns away. */
+/** White rim, plus a 1–3px spectral fringe on the silhouette only. */
 function crystalEdge(physical: MeshPhysicalMaterial) {
   physical.onBeforeCompile = (shader) => {
     shader.fragmentShader = shader.fragmentShader.replace(
@@ -404,15 +404,27 @@ function crystalEdge(physical: MeshPhysicalMaterial) {
           float edgeNd = clamp(dot(normalize(normal), edgeView), 0.0, 1.0);
           float edgeRim = 1.0 - edgeNd;
           float edgeWhite = pow(smoothstep(0.64, 1.0, edgeRim), 1.25) * 0.6;
-          float edgeR = pow(smoothstep(0.46, 0.90, edgeRim), 1.35);
-          float edgeG = pow(smoothstep(0.58, 0.97, edgeRim), 1.55);
-          float edgeB = pow(smoothstep(0.72, 1.0, edgeRim), 1.7);
-          gl_FragColor.rgb += vec3(edgeWhite) + vec3(edgeR, edgeG, edgeB) * vec3(0.50, 0.20, 0.58);
+          // Pixel distance to where N·V crosses zero. Flat side facets have
+          // almost constant fresnel, so the old wide powers painted the whole face.
+          float edgePx = edgeNd / max(fwidth(edgeNd), 1e-4);
+          float edgeThin = 1.0 - smoothstep(0.35, 2.2, edgePx);
+          float edgeGate = pow(smoothstep(0.58, 0.86, edgeRim), 2.0);
+          float edgeBand = edgeThin * edgeGate;
+          float edgeHue = clamp(1.0 - edgePx / 2.2, 0.0, 1.0);
+          vec3 edgeCyan = vec3(0.05, 0.95, 1.0);
+          vec3 edgeMagenta = vec3(1.0, 0.08, 0.9);
+          vec3 edgeAmber = vec3(1.0, 0.7, 0.08);
+          vec3 edgeSpectrum = edgeHue < 0.5
+            ? mix(edgeCyan, edgeMagenta, edgeHue * 2.0)
+            : mix(edgeMagenta, edgeAmber, (edgeHue - 0.5) * 2.0);
+          float edgeEnergy = max(dot(edgeSpectrum, vec3(1.0)), 1e-4);
+          vec3 edgeBalanced = edgeSpectrum * (3.0 / edgeEnergy);
+          gl_FragColor.rgb += vec3(edgeWhite) + edgeBalanced * edgeBand * 0.1;
         }
       `,
     )
   }
-  physical.customProgramCacheKey = () => 'crystal-edge-22'
+  physical.customProgramCacheKey = () => 'crystal-edge-23'
 }
 
 function studioRoom(renderer: WebGLRenderer) {
