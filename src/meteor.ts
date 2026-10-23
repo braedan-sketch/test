@@ -259,7 +259,7 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
           transmission: 1,
           thickness: 1.2,
           ior: 1.55,
-          dispersion: 1.25,
+          dispersion: 0.7,
           iridescence: 0,
           attenuationColor: new Color('#ffffff'),
           attenuationDistance: 40,
@@ -268,8 +268,10 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
           envMapIntensity: 0.32,
           normalMap,
         })
-        // A heavy normal scatters the dot grid into dark specks.
-        physical.normalScale.set(0.04, 0.04)
+        // Enough chip to keep the facets, not enough to speckle the dots.
+        physical.normalScale.set(0.08, 0.08)
+        mesh.castShadow = false
+        mesh.receiveShadow = false
         mesh.material = physical
       } else {
         mesh.material = createGlassMaterial({
@@ -292,6 +294,8 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
       if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere()
       glowRadius = Math.max(glowRadius, mesh.geometry.boundingSphere?.radius ?? 1)
     }
+    // Transparent, so three.js keeps it out of the opaque transmission pass
+    // and draws it after the glass. Layer 1 is that same exclusion, made explicit.
     const glowMat = new ShaderMaterial({
       transparent: true,
       depthWrite: false,
@@ -318,25 +322,29 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
         varying vec3 vLocal;
         uniform float uRadius;
         void main() {
+          float d = length(vLocal) / max(uRadius, 0.001);
+          float radial = pow(1.0 - smoothstep(0.0, 0.85, d), 1.8);
           vec3 n = normalize(vNormal);
           vec3 toView = cameraPosition - vWorld;
           float vLen = length(toView);
           vec3 v = vLen > 1e-5 ? toView / vLen : vec3(0.0, 0.0, 1.0);
-          float facing = smoothstep(0.0, 0.7, clamp(dot(n, v), 0.0, 1.0));
-          float radial = 1.0 - smoothstep(0.0, uRadius, length(vLocal));
-          float glow = facing * facing * (0.22 + 0.78 * radial);
-          gl_FragColor = vec4(vec3(0.92), glow);
+          float facing = smoothstep(0.12, 0.7, clamp(dot(n, v), 0.0, 1.0));
+          float glow = radial * facing;
+          gl_FragColor = vec4(vec3(1.0), glow * 0.38);
         }
       `,
     })
     for (const mesh of crystalMeshes) {
       const inner = new Mesh(mesh.geometry, glowMat)
       inner.name = 'crystal-core'
-      inner.scale.setScalar(0.98)
-      inner.renderOrder = 2
+      // Inner 40% only. The outer 60% is the glass, with no glow mesh on it.
+      inner.scale.setScalar(0.4)
+      inner.renderOrder = 3
+      inner.layers.set(1)
+      inner.frustumCulled = false
       mesh.add(inner)
     }
-    streaks.visible = false
+    streaks.removeFromParent()
     hero.rotation.y = 0.55
     group.add(hero)
     anchors = boxAnchors(hero)

@@ -101,6 +101,9 @@ export async function startExperience(overlay: Overlay) {
 
   const scene = new Scene()
   const camera = new PerspectiveCamera(40, 1, 0.08, 420)
+  // Layer 1 is the crystal's inner glow. It stays out of the opaque
+  // transmission pre-pass and is drawn with the transparent objects.
+  camera.layers.enable(1)
   const world = createWorld(scene, quality)
   scene.environment = createEnvironment(renderer)
   scene.environmentIntensity = 0.35
@@ -827,7 +830,8 @@ function applyGrade(
   }
   if (phase.screen === 'meteor') {
     intensity = 0.28 + phase.meteorT * 0.2
-    threshold = 0.9
+    // Stay above the glass body so only a hot centre can bloom.
+    threshold = 0.96
   }
   if (phase.white > 0.4) intensity += 0.22
   bloom.intensity = intensity
