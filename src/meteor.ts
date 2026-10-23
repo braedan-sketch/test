@@ -80,9 +80,11 @@ function buildDotField() {
           float dot = 1.0 - smoothstep(0.08, 0.16, length(cell));
           vec3 paper = vec3(0.58, 0.59, 0.61);
           vec3 ink = vec3(0.28, 0.30, 0.33);
-          float behind = smoothstep(0.42, 0.0, length(vUv - 0.5));
-          paper = mix(paper, paper * 0.62, behind);
-          ink = mix(ink, ink * 0.45, behind);
+          // Wide and smooth, so the darker field sits behind the shard
+          // without a knee the glass can focus into a line.
+          float behind = smoothstep(0.58, 0.02, length(vUv - 0.5));
+          paper = mix(paper, paper * 0.40, behind);
+          ink = mix(ink, ink * 0.28, behind);
           vec3 color = mix(paper, ink, dot * 0.9);
           vec2 q = abs(vUv - 0.5) * 2.0;
           float edge = smoothstep(0.62, 1.0, max(q.x, q.y));
@@ -230,6 +232,11 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
   const light = new PointLight('#ffffff', 28, 18, 2)
   light.position.set(1.35, 2.15, 3.15)
   group.add(light)
+  // One tight key, in front of a main facet. The broad light above stays.
+  const facet = new PointLight('#ffffff', 0, 4.2, 2)
+  facet.name = 'facet-key'
+  facet.position.set(0.85, 1.72, 1.55)
+  group.add(facet)
 
   let anchors = pickAnchors(position)
   const hero = await loadHero('/models/crystal.glb')
@@ -259,7 +266,7 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
           transmission: 1,
           thickness: 1.2,
           ior: 1.55,
-          dispersion: 0.7,
+          dispersion: 0.9,
           iridescence: 0,
           attenuationColor: new Color('#ffffff'),
           attenuationDistance: 40,
@@ -270,6 +277,9 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
         })
         // Enough chip to keep the facets, not enough to speckle the dots.
         physical.normalScale.set(0.08, 0.08)
+        // Grazing fresnel was reflecting the room as a dark left edge.
+        // A front-face term brightens that silhouette. No second shell.
+        crystalEdge(physical)
         mesh.castShadow = false
         mesh.receiveShadow = false
         mesh.material = physical
@@ -362,6 +372,7 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
         hero.rotation.z = Math.sin(time * 0.17) * 0.08
       }
       light.intensity = 28 + shown * 78
+      facet.intensity = shown * 96
       dots.visible = shown > 0.8
       if (sprite && sprite.visible) sprite.material.opacity = 0.16 + shown * 0.2
     },
@@ -379,6 +390,29 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
       }
     },
   }
+}
+
+/** Thin white rim plus a split R/G/B fresnel, only where the glass turns away. */
+function crystalEdge(physical: MeshPhysicalMaterial) {
+  physical.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <opaque_fragment>',
+      /* glsl */ `
+        #include <opaque_fragment>
+        {
+          vec3 edgeView = normalize(vViewPosition);
+          float edgeNd = clamp(dot(normalize(normal), edgeView), 0.0, 1.0);
+          float edgeRim = 1.0 - edgeNd;
+          float edgeWhite = pow(smoothstep(0.64, 1.0, edgeRim), 1.25) * 0.6;
+          float edgeR = pow(smoothstep(0.46, 0.90, edgeRim), 1.35);
+          float edgeG = pow(smoothstep(0.58, 0.97, edgeRim), 1.55);
+          float edgeB = pow(smoothstep(0.72, 1.0, edgeRim), 1.7);
+          gl_FragColor.rgb += vec3(edgeWhite) + vec3(edgeR, edgeG, edgeB) * vec3(0.50, 0.20, 0.58);
+        }
+      `,
+    )
+  }
+  physical.customProgramCacheKey = () => 'crystal-edge-22'
 }
 
 function studioRoom(renderer: WebGLRenderer) {

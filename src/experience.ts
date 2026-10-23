@@ -92,7 +92,7 @@ export async function startExperience(overlay: Overlay) {
   renderer.outputColorSpace = SRGBColorSpace
   renderer.toneMapping = NoToneMapping
   renderer.toneMappingExposure = 0.9
-  renderer.transmissionResolutionScale = quality.low ? 0.35 : 1.25
+  renderer.transmissionResolutionScale = quality.low ? 0.35 : 1.75
   renderer.setClearColor('#c5c8cc', 1)
   if (quality.shadows) {
     renderer.shadowMap.enabled = true
