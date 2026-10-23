@@ -55,6 +55,7 @@ declare global {
       scrollProgress: (progress: number) => void
       debug?: () => Record<string, unknown>
     }
+    __blendyScrollTo?: (fraction: number) => void
   }
 }
 
@@ -70,6 +71,10 @@ const FOX_TARGET: readonly [number, number, number] = [0.0, 1.02, 0.0]
 const FOX_DIR: readonly [number, number, number] = [0.32, -0.12, 1.05]
 const scratchA = new Vector3()
 const scratchB = new Vector3()
+const poseA = new Vector3()
+const poseB = new Vector3()
+const poseC = new Vector3()
+const poseD = new Vector3()
 
 export async function startExperience(overlay: Overlay) {
   const canvas = document.querySelector('#view')
@@ -187,15 +192,26 @@ export async function startExperience(overlay: Overlay) {
     lenis.scrollTo(`#${id}`, { offset: 0 })
   })
 
+  const scrollToFraction = (fraction: number) => {
+    const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight)
+    lenis.scrollTo(max * clamp(fraction, 0, 1), { immediate: true, force: true })
+  }
   window.__blendy = {
     scrollTo(y) {
-      lenis.scrollTo(y, { immediate: true })
+      lenis.scrollTo(y, { immediate: true, force: true })
     },
     scrollProgress(progress) {
-      const max = document.documentElement.scrollHeight - window.innerHeight
-      lenis.scrollTo(Math.max(0, max) * clamp(progress, 0, 1), { immediate: true })
+      shotLocks = 0
+      scrollToFraction(progress)
     },
   }
+  window.__blendyScrollTo = (fraction) => {
+    shotLocks = 0
+    scrollToFraction(fraction)
+  }
+  const shotQuery = new URLSearchParams(window.location.search).get('shot')
+  const shot = shotQuery == null || shotQuery === '' || !Number.isFinite(Number(shotQuery)) ? null : clamp(Number(shotQuery), 0, 1)
+  let shotLocks = shot == null ? 0 : 90
 
   let figureGroup: Object3D | null = null
   const [meteor, rings, figure] = await Promise.all([
@@ -255,9 +271,13 @@ export async function startExperience(overlay: Overlay) {
     revealed = true
     overlay.hideLoader()
     overlay.revealChrome()
-    overlay.setActive('field')
+    overlay.setActive(screen)
     lenis.resize()
     lenis.start()
+    if (shot != null) {
+      scrollToFraction(shot)
+      shotLocks = 48
+    }
   }
 
   void loadIgloo(quality, sampleHeight, (value) => {
@@ -280,6 +300,10 @@ export async function startExperience(overlay: Overlay) {
     const dt = Math.min(0.05, (now - last) / 1000)
     last = now
     lenis.raf(now)
+    if (shotLocks > 0 && shot != null) {
+      scrollToFraction(shot)
+      shotLocks -= 1
+    }
     if (!document.hidden) {
       shown = lerp(shown, targetProgress, 0.08)
       if (!revealed) overlay.setProgress(shown)
@@ -299,10 +323,11 @@ export async function startExperience(overlay: Overlay) {
 
       igloo?.update(phase.burst, phase.solid, phase.dissolve, reducedMotion ? 0 : now / 1000)
       meteor.update(phase.meteorReveal, reducedMotion ? 0 : now / 1000)
-      rings.update(phase.ringsT, phase.ringsShown)
-      figure.update(phase.figureAppear, phase.figureBlow, reducedMotion ? 0 : now / 1000, dpr)
+      const clock = reducedMotion ? 0 : now / 1000
+      rings.update(phase.ringsT + clock * 0.04, phase.ringsShown)
+      figure.update(phase.figureAppear, phase.figureBlow, clock, dpr)
 
-      applyCamera(phase, pos, target, up, camera)
+      applyCamera(phase, pos, target, up, camera, clock)
       applyGrade(phase, bloom, chromatic, warp, tone, vignette, camera.aspect)
       overlay.setFlash(phase.flash * 0.35)
       overlay.setUiDim(phase.screen === 'rings' ? 1 : 1 - phase.burst * 0.04)
@@ -372,6 +397,7 @@ type Phase = {
   ringsShown: number
   figureAppear: number
   figureBlow: number
+  handoff: number
   mood: number
   ripple: number
   blur: number
@@ -410,23 +436,37 @@ function readPhase(global: number, marks: Marks): Phase {
   const inRings = global >= marks.rings && global < marks.figure
   const inFigure = global >= marks.figure
 
-  const solid = inField ? smoother(clamp((fieldT - 0.15) / 0.16, 0, 1)) : 1
-  const burst = inField ? clamp((fieldT - 0.4) / 0.6, 0, 1) : 1
+  const solid = inField ? smoother(clamp((fieldT - 0.36) / 0.12, 0, 1)) : 1
+  const burst = inField ? clamp((fieldT - 0.58) / 0.42, 0, 1) : 1
   const dissolve = inField ? 0 : inRift ? smoother(clamp((riftT - 0.22) / 0.56, 0, 1)) : 1
-  const meteorReveal = inField ? 0 : inRift ? smoother(clamp((riftT - 0.34) / 0.5, 0, 1)) : inMeteor ? 1 - smoother(clamp((meteorT - 0.8) / 0.2, 0, 1)) : 0
-  const ringsShown = inRings ? 1 : 0
-  const figureAppear = inFigure ? smoother(clamp(figureT / 0.14, 0, 1)) : 0
-  const figureBlow = inFigure ? smoother(clamp((figureT - 0.68) / 0.16, 0, 1)) : 0
+  // Subjects overlap at the edges so a scroll stop never lands on an empty frame.
+  const meteorReveal = inField
+    ? 0
+    : inRift
+      ? smoother(clamp((riftT - 0.25) / 0.4, 0, 1))
+      : inMeteor
+        ? 1 - smoother(clamp((meteorT - 0.9) / 0.1, 0, 1))
+        : 0
+  // The last fifth of the rings scroll swings the camera onto the fox.
+  // Rings fade as that swing finishes, so the frame always has a subject.
+  const handoff = inRings ? smoother(clamp((ringsT - 0.78) / 0.22, 0, 1)) : inFigure ? 1 : 0
+  const ringsShown = inMeteor
+    ? smoother(clamp((meteorT - 0.84) / 0.16, 0, 1))
+    : inRings
+      ? 1 - smoother(clamp((handoff - 0.45) / 0.55, 0, 1))
+      : 0
+  const figureAppear = inRings ? smoother(clamp(handoff / 0.55, 0, 1)) : inFigure ? 1 : 0
+  const wipe = inFigure
+    ? smoother(clamp((figureT - 0.7) / 0.045, 0, 1)) * (1 - smoother(clamp((figureT - 0.8) / 0.045, 0, 1)))
+    : 0
+  // The stream is part of the fox hold. The glitch is a separate short tear.
+  const figureBlow = inFigure ? smoother(clamp((figureT - 0.16) / 0.22, 0, 1)) * 0.42 : 0
 
-  const ripple = inRift ? Math.sin(riftT * Math.PI) : 0
-  const meteorWhite = inMeteor ? smoother(clamp((meteorT - 0.58) / 0.32, 0, 1)) : 0
-  const ringsIn = inRings ? 1 - smoother(clamp(ringsT / 0.12, 0, 1)) : 0
-  const ringsOut = inRings ? smoother(clamp((ringsT - 0.8) / 0.2, 0, 1)) : 0
-  const figureIn = inFigure ? 1 - smoother(clamp(figureT / 0.1, 0, 1)) : 0
-  const white = clamp(meteorWhite * 0.92 + ringsIn + ringsOut + figureIn * 0.75, 0, 1)
-  const glitch = inFigure ? smoother(clamp((figureT - 0.78) / 0.2, 0, 1)) : 0
-  const blur = clamp(ripple * 0.95 + meteorWhite * 0.85 + ringsOut * 0.35, 0, 1)
-  const chroma = clamp(ripple * 0.85 + meteorWhite * 0.28 + glitch * 0.65, 0, 1)
+  const ripple = 0
+  const white = 0
+  const glitch = wipe * 0.16
+  const blur = 0
+  const chroma = 0
 
   let screen: ScreenId = 'field'
   if (inFigure) screen = 'figure'
@@ -435,7 +475,7 @@ function readPhase(global: number, marks: Marks): Phase {
   else if (inRift) screen = 'rift'
 
   let mood = 0
-  if (inFigure) mood = 3
+  if (inFigure) mood = 2 + smoother(clamp(figureT / 0.16, 0, 1))
   else if (inRings) mood = 2
   else if (inMeteor) mood = 1
   else if (inRift) mood = riftT
@@ -443,7 +483,7 @@ function readPhase(global: number, marks: Marks): Phase {
   const labelOpacity =
     inField && solid > 0.45 ? 1 : inRift ? 1 - smoother(clamp(riftT / 0.35, 0, 1)) : inMeteor && meteorT < 0.72 && meteorT > 0.04 ? 1 : 0
 
-  const cycle = inFigure ? smoother(clamp((figureT - 0.12) / 0.1, 0, 1)) * (1 - smoother(clamp((figureT - 0.78) / 0.08, 0, 1))) : 0
+  const cycle = inFigure ? smoother(clamp(figureT / 0.1, 0, 1)) * (1 - wipe) : 0
 
   return {
     screen,
@@ -459,26 +499,27 @@ function readPhase(global: number, marks: Marks): Phase {
     ringsShown,
     figureAppear,
     figureBlow,
+    handoff,
     mood,
     ripple,
     blur,
     glitch,
     white,
-    flash: clamp(ringsOut + meteorWhite * 0.35, 0, 1),
+    flash: 0,
     chroma,
     labelOpacity,
     cycle,
   }
 }
 
-function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, camera: PerspectiveCamera) {
+function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, camera: PerspectiveCamera, time: number) {
   up.set(0, 1, 0)
   const aspect = Math.max(0.2, camera.aspect)
   let fov = 40
   if (phase.screen === 'field' || (phase.screen === 'rift' && phase.riftT < 0.02)) {
     fov = 40
     // Wire hold is a 3/4 view, about 40° down. The eye pose is fully in by the solid frame.
-    const dolly = smoother(clamp((phase.fieldT - 0.08) / 0.16, 0, 1))
+    const dolly = smoother(clamp((phase.fieldT - 0.32) / 0.12, 0, 1))
     mix3(target, DOME_TARGET, EYE_TARGET, dolly)
     up.set(0, 1, 0)
     const dHigh =
@@ -510,41 +551,30 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
   } else if (phase.screen === 'meteor') {
     fov = 34
     const hold = fitBox(1.9, 2.55, 0.54, 0.46, aspect, fov)
-    const push = smoother(clamp((phase.meteorT - 0.62) / 0.38, 0, 1))
-    const dist = lerp(hold, -0.35, push)
     target.set(meteorCenter.x, meteorCenter.y, meteorCenter.z)
-    placeAlong(pos, [target.x, target.y, target.z], CRYSTAL_DIR, Math.max(0.35, dist))
-    if (push > 0.2) {
-      pos.set(meteorCenter.x + 0.04, meteorCenter.y, meteorCenter.z + lerp(hold, -1.1, push))
-      target.set(meteorCenter.x, meteorCenter.y, pos.z - 0.8)
+    placeAlong(pos, [target.x, target.y, target.z], CRYSTAL_DIR, hold)
+    const leave = smoother(clamp((phase.meteorT - 0.9) / 0.1, 0, 1))
+    if (leave > 0) {
+      poseA.copy(pos)
+      poseB.copy(target)
+      const framed = fitBox(4.6, 4.6, 0.7, 0.85, aspect, 36)
+      poseC.set(0, framed * 1.25, 0)
+      poseD.set(0, 0.15, 0)
+      pos.lerpVectors(poseA, poseC, leave)
+      target.lerpVectors(poseB, poseD, leave)
+      fov = lerp(34, 36, leave)
     }
   } else if (phase.screen === 'rings') {
     fov = 36
-    const framed = fitBox(4.6, 4.6, 0.7, 0.85, aspect, fov)
-    const far = framed * 1.25
-    const near = framed * 0.6
-    const y = lerp(far, near, smoother(phase.ringsT))
-    const roll = phase.ringsT * 0.55
-    pos.set(0, y, 0)
-    target.set(0, 0.15, 0)
-    up.set(Math.sin(roll), 0, Math.cos(roll))
+    placeRings(phase.ringsT, aspect, pos, target, up)
+    if (phase.handoff > 0) blendTowardFox(phase, aspect, pos, target, up, phase.handoff)
   } else {
     fov = 34
-    const orbit = clamp(phase.figureT / 0.7, 0, 1)
-    // Bust about two thirds of the frame height, with room for the disc and the stream.
-    const fillH = 0.66
-    const fillW = aspect < 1 ? 0.92 : 0.55
-    const dist = fitBox(1.18, 2.08, fillW, fillH, aspect, fov)
-    const yaw = lerp(-0.02, 0.05, orbit)
-    const dir: [number, number, number] = [
-      FOX_DIR[0] * Math.cos(yaw) - FOX_DIR[2] * Math.sin(yaw),
-      FOX_DIR[1] + orbit * 0.04,
-      FOX_DIR[0] * Math.sin(yaw) + FOX_DIR[2] * Math.cos(yaw),
-    ]
-    target.set(FOX_TARGET[0], FOX_TARGET[1], FOX_TARGET[2])
-    placeAlong(pos, FOX_TARGET, dir, dist + phase.figureBlow * 0.35)
+    placeFox(phase, aspect, pos, target, up)
   }
 
+  holdDrift(pos, target, time)
+  guardUp(pos, target, up)
   if (Math.abs(camera.fov - fov) > 0.01) {
     camera.fov = fov
     camera.updateProjectionMatrix()
@@ -552,6 +582,71 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
   camera.up.copy(up)
   camera.position.copy(pos)
   camera.lookAt(target)
+}
+
+function placeRings(ringsT: number, aspect: number, pos: Vector3, target: Vector3, up: Vector3) {
+  const framed = fitBox(4.6, 4.6, 0.7, 0.85, aspect, 36)
+  const far = framed * 1.25
+  const near = framed * 0.6
+  // The last part of the old dive looked straight down into the glass and
+  // came back fully black on Metal. Hold the height once the rings fill the frame.
+  const y = Math.max(framed * 0.9, lerp(far, near, smoother(ringsT)))
+  const roll = Math.min(1, ringsT) * 0.55
+  pos.set(0, y, 0)
+  target.set(0, 0.15, 0)
+  up.set(Math.sin(roll), 0, Math.cos(roll))
+}
+
+function blendTowardFox(phase: Phase, aspect: number, pos: Vector3, target: Vector3, up: Vector3, amount: number) {
+  poseA.copy(pos)
+  poseB.copy(target)
+  const saved = poseD.copy(up)
+  placeFox(phase, aspect, poseC, target, up)
+  pos.lerpVectors(poseA, poseC, amount)
+  target.lerpVectors(poseB, target, amount)
+  up.lerpVectors(saved, up, amount)
+  if (up.lengthSq() < 1e-6) up.set(0, 1, 0)
+  else up.normalize()
+}
+
+function placeFox(phase: Phase, aspect: number, pos: Vector3, target: Vector3, up: Vector3) {
+  const orbit = clamp(phase.figureT / 0.7, 0, 1)
+  const fillH = 0.66
+  const fillW = aspect < 1 ? 0.92 : 0.55
+  const dist = fitBox(1.18, 2.08, fillW, fillH, aspect, 34)
+  const yaw = lerp(-0.02, 0.05, orbit)
+  const dir: [number, number, number] = [
+    FOX_DIR[0] * Math.cos(yaw) - FOX_DIR[2] * Math.sin(yaw),
+    FOX_DIR[1] + orbit * 0.04,
+    FOX_DIR[0] * Math.sin(yaw) + FOX_DIR[2] * Math.cos(yaw),
+  ]
+  target.set(FOX_TARGET[0], FOX_TARGET[1], FOX_TARGET[2])
+  placeAlong(pos, FOX_TARGET, dir, dist + phase.figureBlow * 0.35)
+  up.set(0, 1, 0)
+}
+
+function holdDrift(pos: Vector3, target: Vector3, time: number) {
+  if (reducedMotion) return
+  const sway = Math.sin(time * 0.23)
+  const nod = Math.cos(time * 0.19)
+  pos.x += sway * 0.4
+  pos.y += nod * 0.16
+  pos.z += Math.sin(time * 0.17 + 1.2) * 0.32
+  target.x += nod * 0.08
+  target.y += sway * 0.04
+}
+
+function guardUp(pos: Vector3, target: Vector3, up: Vector3) {
+  const vx = target.x - pos.x
+  const vy = target.y - pos.y
+  const vz = target.z - pos.z
+  const vlen = Math.hypot(vx, vy, vz) || 1
+  const ulen = Math.hypot(up.x, up.y, up.z) || 1
+  const dot = Math.abs((vx * up.x + vy * up.y + vz * up.z) / (vlen * ulen))
+  if (dot > 0.98) {
+    if (Math.abs(vy / vlen) > 0.9) up.set(0, 0, 1)
+    else up.set(0, 1, 0)
+  }
 }
 
 function objectScreenBounds(object: Object3D | null, camera: PerspectiveCamera, probe: Vector3) {

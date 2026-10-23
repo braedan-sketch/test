@@ -162,10 +162,22 @@ const ringsFragment = /* glsl */ `
         vec2 st0 = dFdx(vUv);
         vec2 st1 = dFdy(vUv);
         float det = st0.x * st1.y - st1.x * st0.y;
-        vec3 t = normalize(q0 * st1.y - q1 * st0.y);
+        // Edge-on ring faces have zero UV derivatives. normalize(0) is NaN and
+        // poisons the whole half-float target on Metal.
+        if (abs(det) < 1e-5) return n;
+        vec3 t = q0 * st1.y - q1 * st0.y;
+        float tl = length(t);
+        if (tl < 1e-5) return n;
+        t /= tl;
         if (det < 0.0) t = -t;
-        vec3 b = normalize(cross(n, t));
-        return normalize(mat3(t, b, n) * mapN);
+        vec3 b = cross(n, t);
+        float bl = length(b);
+        if (bl < 1e-5) return n;
+        b /= bl;
+        vec3 bent = mat3(t, b, n) * mapN;
+        float nl = length(bent);
+        if (nl < 1e-5) return n;
+        return bent / nl;
       }
 
       void main() {
@@ -206,7 +218,7 @@ const ringsFragment = /* glsl */ `
         color += spec * vec3(1.15, 1.12, 1.05);
         color += spec2 * vec3(0.45, 0.62, 0.85) * (0.35 + fresnel);
         color += rainbow * fresnel * uFilm * 0.55;
-        gl_FragColor = vec4(color, 1.0);
+        gl_FragColor = vec4(clamp(color, 0.0, 3.0), 1.0);
       }
 `
 
@@ -268,9 +280,19 @@ const crystalFragment = /* glsl */ `
     if (uHasNormal > 0.5) {
       vec3 mapN = texture2D(uNormalMap, vUv).xyz * 2.0 - 1.0;
       mapN.xy *= uNormalScale;
-      vec3 t = normalize(vTangent);
-      vec3 b = normalize(cross(n, t) * vHand);
-      base = normalize(mat3(t, b, n) * mapN);
+      vec3 t = vTangent;
+      float tl = length(t);
+      if (tl > 1e-5) {
+        t /= tl;
+        vec3 b = cross(n, t) * vHand;
+        float bl = length(b);
+        if (bl > 1e-5) {
+          b /= bl;
+          vec3 bent = mat3(t, b, n) * mapN;
+          float nl = length(bent);
+          if (nl > 1e-5) base = bent / nl;
+        }
+      }
     }
     // Extra planar chips so a face is not one flat shade.
     vec3 cell = floor(vObj * 8.0);

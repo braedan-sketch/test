@@ -295,11 +295,11 @@ header {
 #story { position: relative; z-index: 1; }
 
 .stage { position: relative; }
-.stage[data-screen='field'] { height: 660vh; }
-.stage[data-screen='rift'] { height: 110vh; }
-.stage[data-screen='meteor'] { height: 330vh; }
-.stage[data-screen='rings'] { height: 330vh; }
-.stage[data-screen='figure'] { height: 870vh; }
+.stage[data-screen='field'] { height: 920vh; }
+.stage[data-screen='rift'] { height: 90vh; }
+.stage[data-screen='meteor'] { height: 640vh; }
+.stage[data-screen='rings'] { height: 640vh; }
+.stage[data-screen='figure'] { height: 420vh; }
 
 .sticky {
   position: sticky;

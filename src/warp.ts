@@ -39,19 +39,15 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
   }
 
   if (uGlitch > 0.001 && uv.y < uGlitch) {
-    float depth = clamp((uGlitch - uv.y) / 0.22, 0.0, 1.0);
-    float cells = mix(48.0, 7.0, depth);
-    float band = floor(uv.y * 28.0);
-    float shift = sin(band * 17.3 + uPhase * 8.0) * 0.08 * depth;
-    vec2 count = vec2(cells * max(uAspect, 0.001), cells);
-    vec2 grid = (floor((uv + vec2(shift, 0.0)) * count) + 0.5) / count;
-    float split = mix(0.01, 0.06, depth);
-    float r = texture(inputBuffer, grid + vec2(split, 0.0)).r;
-    float g = texture(inputBuffer, grid).g;
-    float b = texture(inputBuffer, grid - vec2(split, 0.012)).b;
-    float stripe = step(0.5, fract(band * 0.37));
-    vec3 torn = vec3(r, g, b) + vec3(0.45, -0.08, 0.32) * stripe * depth;
-    float edge = smoothstep(uGlitch - 0.028, uGlitch, uv.y);
+    float depth = clamp((uGlitch - uv.y) / 0.45, 0.0, 1.0);
+    float band = floor(uv.y * 96.0);
+    float shift = sin(band * 12.7 + uPhase * 5.0) * 0.008 * depth;
+    vec3 torn = texture(inputBuffer, vec2(uv.x + shift, uv.y)).rgb;
+    float l = dot(torn, vec3(0.299, 0.587, 0.114));
+    torn = vec3(l);
+    float stripe = step(0.82, fract(band * 0.41));
+    torn *= 1.0 - stripe * depth * 0.28;
+    float edge = smoothstep(uGlitch - 0.03, uGlitch, uv.y);
     color.rgb = mix(torn, color.rgb, edge);
   }
 

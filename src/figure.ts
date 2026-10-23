@@ -250,7 +250,7 @@ export async function createFigure(quality: Quality): Promise<Figure> {
     update(appear, blow, time, pixelRatio) {
       // A few degrees, slow. The ring stays put under the bust.
       turn.rotation.y = 0.62 + Math.sin(time * 0.28) * 0.06
-      root.visible = appear > 0.01 && blow < 0.995
+      root.visible = appear > 0.01
       active.uniforms.uAppear!.value = appear
       active.uniforms.uBlow!.value = blow
       active.uniforms.uTime!.value = time
