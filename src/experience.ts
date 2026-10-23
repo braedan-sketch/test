@@ -95,7 +95,7 @@ export async function startExperience(overlay: Overlay) {
   renderer.outputColorSpace = SRGBColorSpace
   renderer.toneMapping = NoToneMapping
   renderer.toneMappingExposure = 0.96
-  renderer.transmissionResolutionScale = quality.low ? 0.35 : 1.75
+  renderer.transmissionResolutionScale = quality.low ? 0.25 : 0.5
   renderer.setClearColor('#c5c8cc', 1)
   if (quality.shadows) {
     renderer.shadowMap.enabled = true
@@ -107,6 +107,10 @@ export async function startExperience(overlay: Overlay) {
   // Layer 1 is the crystal's inner glow. It stays out of the opaque
   // transmission pre-pass and is drawn with the transparent objects.
   camera.layers.enable(1)
+  let targetProgress = 0.04
+  const iglooPromise = loadIgloo(quality, renderer, (value) => {
+    targetProgress = Math.max(targetProgress, value)
+  })
   const world = createWorld(scene, quality, renderer)
   scene.environment = createEnvironment(renderer)
   scene.environmentIntensity = 0.35
@@ -126,15 +130,15 @@ export async function startExperience(overlay: Overlay) {
     radius: 0.45,
   })
   const chromatic = new ChromaticAberrationEffect({
-    offset: new Vector2(0.0028, 0.0016),
-    radialModulation: true,
-    modulationOffset: 0.28,
+    offset: new Vector2(0.0011, 0.0006),
+    radialModulation: false,
+    modulationOffset: 0,
   })
   const softGpu = softwareGpu(renderer)
   const dof = new DepthOfFieldEffect(camera, {
     focusDistance: 8,
-    focusRange: 4.2,
-    bokehScale: quality.low ? 0.7 : softGpu ? 1.3 : 3.2,
+    focusRange: 2.8,
+    bokehScale: quality.low ? 0.35 : softGpu ? 0.65 : 1.6,
     resolutionScale: quality.low || softGpu ? 0.25 : 0.5,
   })
   const warp = new WarpEffect()
@@ -237,7 +241,7 @@ export async function startExperience(overlay: Overlay) {
   let figureGroup: Object3D | null = null
   const [meteor, rings, figure] = await Promise.all([
     createMeteor(quality, renderer),
-    createRings(quality),
+    createRings(quality, renderer),
     createFigure(quality),
   ])
   scene.add(meteor.group, rings.group, figure.group)
@@ -248,9 +252,9 @@ export async function startExperience(overlay: Overlay) {
 
   const pos = new Vector3()
   const target = new Vector3()
-  // The look target is rewritten in place every frame. DoF follows it,
-  // so the subject stays sharp and the mountains fall off.
-  dof.target = target
+  const focusPoint = new Vector3(0, 1.15, 0)
+  // Field focus stays on the dome. Other scenes follow the look target.
+  dof.target = focusPoint
   if (window.__blendy) {
     const probe = new Vector3()
     window.__blendy.debug = () => {
@@ -280,7 +284,6 @@ export async function startExperience(overlay: Overlay) {
   let slots: LabelAnchor[] = []
   const meteorSlots: LabelAnchor[] = makeLabelSlots(meteor.labelCount)
   let shown = 0
-  let targetProgress = 0.04
   let ready = false
   let revealed = false
   let samples = 0
@@ -305,13 +308,17 @@ export async function startExperience(overlay: Overlay) {
     }
   }
 
-  void loadIgloo(quality, renderer, (value) => {
-    targetProgress = Math.max(targetProgress, value)
-  })
-    .then((loaded) => {
+  void iglooPromise
+    .then(async (loaded) => {
       igloo = loaded
       scene.add(loaded.group)
       slots = makeLabelSlots(loaded.labelCount)
+      targetProgress = 0.98
+      try {
+        await renderer.compileAsync(loaded.group, camera, scene)
+      } catch (error) {
+        console.warn(error)
+      }
       targetProgress = 1
       ready = true
     })
@@ -351,7 +358,7 @@ export async function startExperience(overlay: Overlay) {
       clear.copy(world.fog.color)
       renderer.setClearColor(clear, 1)
       scene.environmentIntensity =
-        phase.screen === 'field' || phase.screen === 'rift' ? 0.28 : phase.screen === 'meteor' ? 1.15 : 0.85
+        phase.screen === 'field' || phase.screen === 'rift' ? 0.16 : phase.screen === 'meteor' ? 0.85 : 0.55
 
       if (ssao) ssao.intensity = phase.screen === 'field' && phase.solid < 0.12 ? 0 : 0.85
       igloo?.update(phase.burst, phase.solid, phase.dissolve, reducedMotion ? 0 : now / 1000)
@@ -361,6 +368,7 @@ export async function startExperience(overlay: Overlay) {
       figure.update(phase.figureAppear, phase.figureBlow, clock, dpr)
 
       applyCamera(phase, pos, target, up, camera, clock)
+      dof.target = phase.screen === 'field' ? focusPoint : target
       applyGrade(phase, bloom, chromatic, warp, tone, vignette, camera.aspect)
       overlay.setFlash(phase.flash * 0.35)
       overlay.setUiDim(phase.screen === 'rings' ? 1 : 1 - phase.burst * 0.04)
@@ -565,8 +573,8 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     target.set(EYE_TARGET[0], EYE_TARGET[1], EYE_TARGET[2])
     up.set(0, 1, 0)
     const span = phase.burst
-    const eyeWidth = lerp(4.15, 4.75, span)
-    const eyeHeight = lerp(2.07, 2.7, span)
+    const eyeWidth = lerp(3.65, 4.3, span)
+    const eyeHeight = lerp(2.45, 2.85, span)
     const dEye =
       aspect >= 1
         ? desktopEyeDistance(eyeWidth, eyeHeight, aspect, fov) * 0.82
@@ -581,8 +589,8 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     const crystalPos: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
     const riftEye =
       aspect >= 1
-        ? desktopEyeDistance(4.75, 2.7, aspect, 40) * 0.82
-        : fitBox(4.75, 2.7, 0.78, 0.58, aspect, 40)
+        ? desktopEyeDistance(4.3, 2.85, aspect, 40) * 0.82
+        : fitBox(4.3, 2.85, 0.78, 0.58, aspect, 40)
     placeAlong(scratchA, EYE_TARGET, EYE_DIR, riftEye)
     placeAlong(scratchB, crystalPos, CRYSTAL_DIR, hold)
     const riftBlend = smoother(phase.riftT)
@@ -625,10 +633,11 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
 }
 
 function placeRings(ringsT: number, aspect: number, pos: Vector3, target: Vector3, up: Vector3) {
-  const dist = fitBox(4.6, 2.2, aspect < 1 ? 0.78 : 0.7, aspect < 1 ? 0.42 : 0.46, aspect, 36) * 0.78
-  const yaw = 0.55 + ringsT * 0.08
-  pos.set(Math.sin(yaw) * dist, Math.max(0.9, dist * 0.2), Math.cos(yaw) * dist)
-  target.set(0, 0.42, 0)
+  const portrait = aspect < 1
+  const dist = fitBox(6.6, 2.6, portrait ? 0.46 : 0.58, portrait ? 0.26 : 0.4, aspect, 36)
+  const yaw = 0.72 + ringsT * 0.06
+  pos.set(Math.sin(yaw) * dist, Math.max(1.15, dist * (portrait ? 0.3 : 0.24)), Math.cos(yaw) * dist)
+  target.set(0, 0.7, 0)
   up.set(0, 1, 0)
 }
 
@@ -832,12 +841,12 @@ function applyGrade(
   if (tone.blendMode.blendFunction !== BlendFunction.SRC) tone.blendMode.blendFunction = BlendFunction.SRC
   const figure = phase.screen === 'figure'
   const heroGlow = phase.screen === 'field' || phase.screen === 'rift'
-  bloom.intensity = figure ? 0.12 : heroGlow ? 0.88 + burst * 0.08 : 0.72
-  bloom.luminanceMaterial.threshold = figure ? 0.92 : 0.8
+  bloom.intensity = figure ? 0.1 : heroGlow ? 0.32 + burst * 0.05 : 0.38
+  bloom.luminanceMaterial.threshold = figure ? 0.94 : 0.88
   vignette.darkness = 0.55
   vignette.offset = 0.35
-  const fringe = 0.0028 + (phase.chroma > 0.02 ? phase.chroma * 0.002 : 0)
-  chromatic.offset.set(fringe, fringe * 0.58)
+  const fringe = 0.0011 + (phase.chroma > 0.02 ? phase.chroma * 0.001 : 0)
+  chromatic.offset.set(fringe, fringe * 0.45)
   warp.setWarp(phase.ripple, phase.blur, phase.glitch, phase.white, phase.riftT + phase.figureT, aspect)
 }
 
@@ -905,8 +914,8 @@ function softwareGpu(renderer: WebGLRenderer) {
 }
 
 function addLights(scene: Scene, shadows: boolean) {
-  scene.add(new HemisphereLight('#d5dee6', '#6d777f', 0.38))
-  const key = new DirectionalLight('#f4f7f8', 2.75)
+  scene.add(new HemisphereLight('#e7eef4', '#c5d0da', 0.55))
+  const key = new DirectionalLight('#f4f7f8', 2.1)
   key.position.set(-6.5, 12.5, 9.5)
   key.target.position.set(0.1, 1.2, 0)
   scene.add(key, key.target)

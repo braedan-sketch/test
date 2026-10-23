@@ -1,17 +1,18 @@
 import {
   Box3,
-  BufferGeometry,
+  CanvasTexture,
   Color,
   FogExp2,
-  Float32BufferAttribute,
   Group,
   Mesh,
   MeshStandardMaterial,
   Raycaster,
   ShaderMaterial,
   SphereGeometry,
+  Sprite,
+  SpriteMaterial,
+  SRGBColorSpace,
   BackSide,
-  Points,
   Vector3,
   type Object3D,
   type Scene,
@@ -20,8 +21,7 @@ import {
 import { loadHero } from './heroModel'
 import type { Quality } from './quality'
 
-const HAZE = new Color('#101820')
-const FAR_HAZE = new Color('#070b10')
+const HAZE = new Color('#d5dee6')
 
 let groundY = 0
 
@@ -57,7 +57,7 @@ export function createWorld(scene: Scene, quality: Quality, renderer: WebGLRende
   const rayDown = new Vector3(0, -1, 0)
   let seated = false
 
-  void loadHero('/models/mountains.glb', renderer).then((hero) => {
+  void loadHero('/models/mountains.glb', renderer, { eager: true }).then((hero) => {
     if (!hero) return
     hero.name = 'mountains'
     hero.traverse((object) => {
@@ -69,7 +69,7 @@ export function createWorld(scene: Scene, quality: Quality, renderer: WebGLRende
     ranges.add(hero)
   })
 
-  void loadHero('/models/terrain.glb', renderer).then((hero) => {
+  void loadHero('/models/terrain.glb', renderer, { eager: true }).then((hero) => {
     if (!hero) return
     hero.name = 'terrain-mesh'
     hero.traverse((object) => {
@@ -100,31 +100,27 @@ export function createWorld(scene: Scene, quality: Quality, renderer: WebGLRende
       seated = true
     },
     update(time, mood, wire = 0, field = true) {
-      const color = fogColor(mood)
+      const color = fogColor()
       fog.color.copy(color)
-      fog.density = wire > 0.5 ? 0.00035 : fogDensity(mood)
-      if (wire > 0.5) fog.color.set('#8ea0ae')
+      fog.density = fogDensity(mood)
       skyMat.uniforms.uMood!.value = mood
       skyMat.uniforms.uWire!.value = wire
-      // The hero sheet is the Field only. Past the rift it folds into a white blade.
-      terrainRoot.visible = field
+      // The mound and skirt stay under every scene so the ranges meet snow.
+      terrainRoot.visible = true
       const showSnow = field && wire < 0.4
       if (showSnow) {
-        if (!snow.points.parent) scene.add(snow.points)
-        const attr = snow.points.geometry.getAttribute('position')
-        if (attr) {
-          for (let i = 0; i < snow.count; i += 1) {
-            let y = snow.base[i] ?? 0
-            y += time * (0.15 + (snow.speed[i] ?? 0.2))
-            const span = 8
-            y = ((y % span) + span) % span
-            attr.setY(i, y * 0.45 + 0.6)
-            attr.setX(i, (snow.x[i] ?? 0) + Math.sin(time * 0.15 + i) * 0.08)
-          }
-          attr.needsUpdate = true
+        if (!snow.group.parent) scene.add(snow.group)
+        for (let i = 0; i < snow.flakes.length; i += 1) {
+          const flake = snow.flakes[i]
+          if (!flake) continue
+          let y = (snow.base[i] ?? 0) + time * (snow.speed[i] ?? 0.2)
+          const span = 7
+          y = ((y % span) + span) % span
+          flake.position.y = y * 0.7 + 0.35
+          flake.position.x = (snow.x[i] ?? 0) + Math.sin(time * 0.15 + i) * 0.08
         }
-      } else if (snow.points.parent) {
-        snow.points.removeFromParent()
+      } else if (snow.group.parent) {
+        snow.group.removeFromParent()
       }
     },
   }
@@ -144,7 +140,7 @@ function gradeSurface(entry: Mesh['material']) {
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <opaque_fragment>',
       `#include <opaque_fragment>
-       gl_FragColor.rgb = pow(max(gl_FragColor.rgb, vec3(0.0)), vec3(1.55)) * 1.7;`,
+       gl_FragColor.rgb = pow(max(gl_FragColor.rgb, vec3(0.0)), vec3(1.12)) * 1.05;`,
     )
   }
   entry.customProgramCacheKey = () => `${priorKey()}-range`
@@ -171,13 +167,15 @@ function buildSky() {
       void main() {
         vec3 d = normalize(vDir);
         float h = d.y;
-        vec3 zenith = vec3(0.004, 0.005, 0.008);
-        vec3 haze = vec3(0.03, 0.034, 0.042);
-        vec3 color = mix(haze, zenith, smoothstep(0.0, 0.48, h));
-        float ground = smoothstep(0.02, -0.35, h);
-        color = mix(color, vec3(0.008, 0.01, 0.013), ground);
-        color = mix(color, zenith, clamp(uMood, 0.0, 1.0) * 0.18);
-        color = mix(color, haze, uWire * 0.22);
+        vec3 zenith = vec3(0.58, 0.66, 0.74);
+        vec3 haze = vec3(0.74, 0.79, 0.84);
+        vec3 snow = vec3(0.70, 0.74, 0.78);
+        float above = smoothstep(-0.04, 0.55, h);
+        vec3 color = mix(haze, zenith, above);
+        float ground = smoothstep(0.12, -0.28, h);
+        color = mix(color, snow, ground);
+        color = mix(color, haze, clamp(uMood, 0.0, 1.0) * 0.08);
+        color = mix(color, haze, uWire * 0.12);
         gl_FragColor = vec4(color, 1.0);
       }
     `,
@@ -188,68 +186,61 @@ function buildSky() {
   return sky
 }
 
+function discTexture() {
+  const canvas = document.createElement('canvas')
+  canvas.width = 64
+  canvas.height = 64
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+  const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 30)
+  gradient.addColorStop(0, 'rgba(255,255,255,0.9)')
+  gradient.addColorStop(0.28, 'rgba(236,244,252,0.45)')
+  gradient.addColorStop(0.62, 'rgba(220,230,240,0.12)')
+  gradient.addColorStop(1, 'rgba(255,255,255,0)')
+  ctx.fillStyle = gradient
+  ctx.fillRect(0, 0, 64, 64)
+  const texture = new CanvasTexture(canvas)
+  texture.colorSpace = SRGBColorSpace
+  return texture
+}
+
 function buildSnow(count: number) {
-  const positions = new Float32Array(count * 3)
-  const sizes = new Float32Array(count)
+  const map = discTexture()
+  const material = new SpriteMaterial({
+    map: map ?? undefined,
+    color: '#f7fbff',
+    transparent: true,
+    opacity: 0.8,
+    depthWrite: false,
+    depthTest: true,
+    fog: false,
+  })
+  const group = new Group()
+  group.name = 'snow-discs'
+  const flakes: Sprite[] = []
   const base: number[] = []
   const speed: number[] = []
   const x: number[] = []
   for (let i = 0; i < count; i += 1) {
-    const px = (Math.random() - 0.5) * 28
-    const py = Math.random()
-    const pz = (Math.random() - 0.5) * 28
-    positions[i * 3] = px
-    positions[i * 3 + 1] = py * 3
-    positions[i * 3 + 2] = pz
-    sizes[i] = 0.75 + Math.random() * 1.15
+    const flake = new Sprite(material)
+    const size = 0.07 + Math.random() * 0.11
+    const px = (Math.random() - 0.5) * 26
+    flake.scale.setScalar(size)
+    flake.position.set(px, Math.random() * 6, (Math.random() - 0.5) * 26)
+    flake.renderOrder = 2
+    group.add(flake)
+    flakes.push(flake)
     x.push(px)
-    base.push(py * 8)
+    base.push(Math.random() * 7)
     speed.push(0.12 + Math.random() * 0.35)
   }
-  const geometry = new BufferGeometry()
-  geometry.setAttribute('position', new Float32BufferAttribute(positions, 3))
-  geometry.setAttribute('aSize', new Float32BufferAttribute(sizes, 1))
-  const points = new Points(
-    geometry,
-    new ShaderMaterial({
-      transparent: true,
-      depthWrite: true,
-      depthTest: true,
-      fog: false,
-      uniforms: { uPixel: { value: 1 } },
-      vertexShader: /* glsl */ `
-        attribute float aSize;
-        uniform float uPixel;
-        void main() {
-          vec4 mv = modelViewMatrix * vec4(position, 1.0);
-          gl_Position = projectionMatrix * mv;
-          float dist = max(0.4, -mv.z);
-          gl_PointSize = clamp(uPixel * aSize * (220.0 / dist), 16.0, 48.0);
-        }
-      `,
-      fragmentShader: /* glsl */ `
-        void main() {
-          vec2 d = gl_PointCoord - vec2(0.5);
-          float r = length(d);
-          float soft = exp(-r * r * 6.5);
-          soft *= smoothstep(0.5, 0.18, r);
-          if (soft < 0.03) discard;
-          gl_FragColor = vec4(vec3(0.95, 0.97, 1.0), soft * 0.62);
-        }
-      `,
-    }),
-  )
-  points.frustumCulled = false
-  points.renderOrder = 2
-  return { points, count, base, speed, x }
+  return { group, flakes, base, speed, x }
 }
 
-const moodColor = new Color()
-
-function fogColor(mood: number) {
-  return moodColor.copy(HAZE).lerp(FAR_HAZE, mood > 1.15 ? 0.55 : 0)
+function fogColor() {
+  return HAZE
 }
 
 function fogDensity(mood: number) {
-  return mood > 1.2 ? 0.0018 : 0.0009
+  return mood > 1.2 ? 0.0044 : 0.0032
 }

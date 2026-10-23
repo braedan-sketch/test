@@ -1,4 +1,4 @@
-import { Color, MeshStandardMaterial, ShaderMaterial, Vector3 } from 'three'
+import { Color, MeshStandardMaterial, Vector3 } from 'three'
 import type { Quality } from './quality'
 
 export const NOISE = /* glsl */ `
@@ -152,56 +152,4 @@ export function createBlockMaterial(quality: Quality) {
   }
 
   return { material, uniforms }
-}
-
-/** Milky ice for the tunnel slabs. Opaque, so it sorts with the bricks. */
-export function createIceSlabMaterial(uniforms: BlockUniforms) {
-  return new ShaderMaterial({
-    fog: false,
-    toneMapped: true,
-    uniforms: {
-      uSolid: uniforms.uSolid,
-      uDissolve: uniforms.uDissolve,
-    },
-    vertexShader: /* glsl */ `
-      attribute float aSeed;
-      varying float vSeed;
-      varying vec3 vWorld;
-      varying vec3 vNormalW;
-      void main() {
-        vSeed = aSeed;
-        vNormalW = normalize(mat3(modelMatrix) * normal);
-        vec4 world = modelMatrix * vec4(position, 1.0);
-        vWorld = world.xyz;
-        gl_Position = projectionMatrix * viewMatrix * world;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      varying float vSeed;
-      varying vec3 vWorld;
-      varying vec3 vNormalW;
-      uniform float uSolid;
-      uniform float uDissolve;
-      void main() {
-        if (uSolid < 0.04 && uDissolve < 0.2) discard;
-        if (uSolid < 0.999 && vSeed > uSolid) discard;
-        if (uDissolve > 0.001 && vSeed < uDissolve) discard;
-        vec3 n = normalize(vNormalW);
-        vec3 viewDir = cameraPosition - vWorld;
-        float vLen = length(viewDir);
-        vec3 v = vLen > 1e-5 ? viewDir / vLen : vec3(0.0, 0.0, 1.0);
-        float ndv = clamp(dot(n, v), 0.0, 1.0);
-        float rim = pow(1.0 - ndv, 2.4);
-        float grit = fract(sin(dot(vWorld.xyz, vec3(17.1, 39.4, 9.2))) * 43758.5);
-        float vein = smoothstep(0.42, 0.7, fract(sin(dot(floor(vWorld * 6.5), vec3(12.9, 78.2, 45.1))) * 12543.2));
-        vec3 deep = vec3(0.16, 0.2, 0.26);
-        vec3 milk = vec3(0.48, 0.56, 0.64);
-        vec3 color = mix(deep, milk, pow(ndv, 0.4));
-        color *= 0.92 + grit * 0.1;
-        color = mix(color, vec3(0.86, 0.92, 0.97), vein * 0.22);
-        color += vec3(0.75, 0.88, 1.0) * rim * 0.5;
-        gl_FragColor = vec4(color, 1.0);
-      }
-    `,
-  })
 }

@@ -1,4 +1,4 @@
-import { Group, Mesh, MeshStandardMaterial, Vector3, type Object3D, type WebGLRenderer } from 'three'
+import { Group, Mesh, MeshStandardMaterial, PointLight, Vector3, type Object3D, type WebGLRenderer } from 'three'
 import { brand } from './brand'
 import { loadHero } from './heroModel'
 import type { BlockUniforms } from './ice'
@@ -14,8 +14,8 @@ const LABEL_OFFSETS: Array<[number, number]> = [
   [-13, 2],
 ]
 
-/** Baked rim map. Bloom (threshold 0.8) turns this into the white-hot seam. */
-const EMISSIVE_INTENSITY = 4
+/** Cool gap light. Faces stay the baked grey; bloom stays under the cap. */
+const EMISSIVE_INTENSITY = 2
 
 export type LabelAnchor = {
   position: Vector3
@@ -55,10 +55,13 @@ export async function loadIgloo(
   renderer: WebGLRenderer,
   onProgress: (value: number) => void,
 ): Promise<Igloo> {
-  onProgress(0.12)
-  const loaded = await loadHero('/models/igloo.glb', renderer)
+  onProgress(0.08)
+  const loaded = await loadHero('/models/igloo.glb', renderer, {
+    eager: true,
+    onProgress: (value) => onProgress(0.08 + value * 0.84),
+  })
   if (!loaded) throw new Error('igloo.glb missing')
-  onProgress(0.96)
+  onProgress(0.94)
 
   const group = loaded
   group.name = 'igloo'
@@ -68,19 +71,20 @@ export async function loadIgloo(
 
   const blocks: Block[] = []
   const seen = new Set<Object3D>()
-  const lit = new Set<MeshStandardMaterial>()
+  const shared = new Map<string, MeshStandardMaterial>()
+  const solidUniforms: Array<{ value: number }> = []
 
   group.traverse((object) => {
     if (!(object instanceof Mesh)) return
     object.castShadow = quality.shadows
     object.receiveShadow = quality.shadows
     object.frustumCulled = true
-    for (const entry of materialsOf(object)) warmSeams(entry, lit)
-
     const node = blockCarrier(object)
+    const extras = readExtras(node.userData)
+    object.material = dressSnow(object.material, shared, solidUniforms)
+
     if (seen.has(node)) return
     seen.add(node)
-    const extras = readExtras(node.userData)
     const base = node.position.clone()
     blocks.push({
       node,
@@ -104,6 +108,9 @@ export async function loadIgloo(
     uCenter: { value: new Vector3() },
   }
   const worldPoint = new Vector3()
+  const gapLight = new PointLight('#d5e4f4', 0, 4.8, 2)
+  gapLight.position.set(0, 0.9, 0)
+  group.add(gapLight)
 
   return {
     group,
@@ -113,7 +120,10 @@ export async function loadIgloo(
       uniforms.uBurst.value = burst
       uniforms.uSolid.value = solid
       uniforms.uDissolve.value = dissolve
+      for (const slot of solidUniforms) slot.value = solid
       group.visible = dissolve < 0.985
+      const present = smoother(clamp(solid * 1.15, 0, 1)) * (1 - smoother(dissolve))
+      gapLight.intensity = present * 5
       const open = burst * (1 - smoother(dissolve))
       for (const block of blocks) {
         const travel = blockTravel(block, open)
@@ -157,17 +167,75 @@ export function makeLabelSlots(count: number): LabelAnchor[] {
   }))
 }
 
-function materialsOf(mesh: Mesh) {
-  return Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-}
-
-function warmSeams(entry: Mesh['material'], lit: Set<MeshStandardMaterial>) {
-  if (Array.isArray(entry) || !(entry instanceof MeshStandardMaterial) || lit.has(entry)) return
-  lit.add(entry)
-  entry.emissive.setRGB(1, 1, 1)
+function dressSnow(
+  material: Mesh['material'],
+  shared: Map<string, MeshStandardMaterial>,
+  solidUniforms: Array<{ value: number }>,
+) {
+  const source = Array.isArray(material) ? material[0] : material
+  if (!(source instanceof MeshStandardMaterial)) return material
+  const existing = shared.get('snow')
+  if (existing) return existing
+  const entry = source.clone()
+  entry.emissive.setRGB(0.86, 0.93, 1)
   entry.emissiveIntensity = EMISSIVE_INTENSITY
+  entry.metalness = 0
+  entry.envMapIntensity = 0.1
   entry.toneMapped = true
   entry.fog = true
+  const uniforms = { uSolid: { value: 1 } }
+  const prior = entry.onBeforeCompile
+  const priorKey = entry.customProgramCacheKey.bind(entry)
+  entry.onBeforeCompile = (shader, renderer) => {
+    prior.call(entry, shader, renderer)
+    shader.uniforms.uSolid = uniforms.uSolid
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec3 vSnowWorld;
+        varying vec3 vSnowNormal;`,
+      )
+      .replace(
+        '#include <beginnormal_vertex>',
+        `#include <beginnormal_vertex>
+        vSnowNormal = normalize(mat3(modelMatrix) * objectNormal);`,
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        vSnowWorld = (modelMatrix * vec4(position, 1.0)).xyz;`,
+      )
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec3 vSnowWorld;
+        varying vec3 vSnowNormal;
+        uniform float uSolid;`,
+      )
+      .replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+        totalEmissiveRadiance *= vec3(0.82, 0.91, 1.0) * smoothstep(0.25, 0.8, uSolid);`,
+      )
+      .replace(
+        '#include <opaque_fragment>',
+        `#include <opaque_fragment>
+        float draw = smoothstep(0.04, 0.82, uSolid);
+        vec3 nrm = normalize(vSnowNormal);
+        float crease = length(fwidth(nrm));
+        float edge = smoothstep(0.012, 0.16, crease);
+        float ndv = clamp(abs(dot(nrm, normalize(cameraPosition - vSnowWorld))), 0.0, 1.0);
+        edge = max(edge, smoothstep(0.2, 0.72, pow(1.0 - ndv, 1.8)));
+        if (draw < 0.98 && edge < mix(0.34, 0.0, draw)) discard;
+        gl_FragColor.rgb = mix(vec3(0.20, 0.24, 0.30), gl_FragColor.rgb, draw);`,
+      )
+  }
+  entry.customProgramCacheKey = () => `${priorKey()}-igloo-v7`
+  solidUniforms.push(uniforms.uSolid)
+  shared.set('snow', entry)
+  return entry
 }
 
 function blockCarrier(mesh: Mesh) {
@@ -204,12 +272,10 @@ function separationDir(base: Vector3) {
 }
 
 function blockReach(block: Block) {
-  if (block.order < 0) return 0.55 + block.row * 0.15
-  return 0.7 + block.row * 0.22
+  return 0.55 + block.row * 0.18
 }
 
 function blockDelay(block: Block) {
-  if (block.order < 0) return 0.04 + block.row * 0.05
   return (1 - clamp(block.order, 0, 1)) * 0.28
 }
 

@@ -195,7 +195,7 @@ export async function createFigure(quality: Quality): Promise<Figure> {
 
   const turn = new Group()
   root.add(turn)
-  const cloud = await loadHero('/models/fox_points.glb')
+  const cloud = await loadHero('/models/fox_points.glb', undefined, { eager: true })
   const sampled = cloud?.getObjectByProperty('type', 'Points')
   if (sampled instanceof Points && sampled.geometry.getAttribute('normal')) {
     const source = quality.low ? thinPoints(sampled.geometry, quality.points) : sampled.geometry

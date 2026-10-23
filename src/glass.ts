@@ -232,14 +232,10 @@ const ringsFragment = /* glsl */ `
         stone = mix(stone, stone * 0.45, chip);
         vec3 color = stone;
         color = mix(color, reflected * 0.55, fresnel * 0.45);
-        color += spec * vec3(1.05, 1.08, 1.12) * 0.9;
-        color += spec2 * vec3(0.62, 0.74, 0.86) * 0.4;
-        color += vec3(0.86, 0.93, 1.0) * pow(fresnel, 2.4) * 0.7;
-        float latU = abs(fract(vUv.x * 22.0) - 0.5);
-        float latV = abs(fract(vUv.y * 7.0) - 0.5);
-        float lattice = 1.0 - smoothstep(0.012, 0.07, min(latU, latV));
-        color += vec3(0.72, 0.88, 1.0) * lattice * (0.35 + fresnel);
-        gl_FragColor = vec4(clamp(color, 0.0, 2.4), 1.0);
+        color += spec * vec3(1.05, 1.08, 1.12) * 0.35;
+        color += spec2 * vec3(0.62, 0.74, 0.86) * 0.16;
+        color += vec3(0.86, 0.93, 1.0) * pow(fresnel, 2.4) * 0.28;
+        gl_FragColor = vec4(clamp(color, 0.0, 1.6), 1.0);
       }
 `
 

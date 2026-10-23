@@ -240,7 +240,7 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
   group.add(facet)
 
   let anchors = pickAnchors(position)
-  const hero = await loadHero('/models/crystal.glb')
+  const hero = await loadHero('/models/crystal.glb', renderer, { eager: true })
   if (hero) {
     crystal.visible = false
     core.visible = false
