@@ -557,6 +557,21 @@ body[data-screen='meteor'] .tags {
     padding: 62vh 6vw 6vh;
   }
   .stage[data-screen='meteor'] .copy { max-width: 100%; }
+  .stage[data-screen='rings'] .sticky {
+    align-items: flex-end;
+    padding-bottom: 16vh;
+  }
+  body[data-screen='figure'] .cycle { display: none; }
+  /* The plinth sits in the lower fifth. Keep the witness block under it. */
+  .stage[data-screen='figure'] .sticky {
+    align-items: flex-start;
+    justify-content: center;
+    padding: 86vh 16px 6px;
+  }
+  .stage[data-screen='figure'] .kicker { margin: 0; font-size: 9px; }
+  .stage[data-screen='figure'] .title { font-size: 20px; line-height: 1; }
+  .stage[data-screen='figure'] .body { margin-top: 2px; font-size: 10px; line-height: 1.25; }
+  .stage[data-screen='figure'] .contact { margin-top: 2px; font-size: 10px; }
   body[data-screen='figure'] .frame i:nth-child(1),
   body[data-screen='figure'] .frame i:nth-child(3) { left: 18px; }
   body[data-screen='figure'] .frame i:nth-child(2),

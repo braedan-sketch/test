@@ -408,6 +408,16 @@ function buildSky() {
   return sky
 }
 
+function gridHeight(x: number, z: number) {
+  const radius = Math.hypot(x, z)
+  let height = Math.sin(x * 0.16 + 0.4) * Math.sin(z * 0.13 + 1.1) * 0.72
+  height += Math.sin(x * 0.045 + 0.8) * Math.cos(z * 0.038 - 0.3) * 1.05
+  height += Math.sin(x * 0.28 - z * 0.09) * Math.cos(x * 0.07 + z * 0.19) * 0.26
+  height += x * 0.06 + Math.max(0, -z) * 0.015
+  const pad = Math.exp(-radius * radius * 0.2)
+  return height * (1 - pad * 0.97)
+}
+
 function edgeFade(x: number, z: number) {
   const d = Math.hypot(x, z)
   const t = Math.min(1, Math.max(0, (d - 5) / 18))
@@ -422,7 +432,8 @@ function buildGroundWire() {
   const extent = 26
   const positions: number[] = []
   const colors: number[] = []
-  const yAt = (x: number, z: number) => sampleHeight(x, z) + 0.045
+  // Broad snow only. Rock and pebble spikes turn the grid into sliver triangles.
+  const yAt = (x: number, z: number) => gridHeight(x, z) + 0.045
   const push = (x0: number, z0: number, x1: number, z1: number) => {
     const fade = edgeFade((x0 + x1) * 0.5, (z0 + z1) * 0.5)
     if (fade < 0.04) return

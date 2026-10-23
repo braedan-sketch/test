@@ -108,7 +108,9 @@ export async function startExperience(overlay: Overlay) {
 
   const composer = new EffectComposer(renderer, {
     frameBufferType: HalfFloatType,
-    multisampling: 0,
+    // MSAA on the real GPU softens the ring fringe. SwiftShader stalls on it,
+    // and the loader never finishes, so that path keeps SMAA only.
+    multisampling: quality.low || softwareGpu(renderer) ? 0 : 4,
   })
   const bloom = new BloomEffect({
     intensity: 0.15,
@@ -129,7 +131,7 @@ export async function startExperience(overlay: Overlay) {
   })
   noise.blendMode.setOpacity(0.045)
   const vignette = new VignetteEffect({ darkness: 0.22, offset: 0.42 })
-  const smaa = quality.smaa ? new SMAAEffect({ preset: SMAAPreset.MEDIUM }) : null
+  const smaa = quality.smaa ? new SMAAEffect({ preset: SMAAPreset.HIGH }) : null
   const normalPass = quality.low ? null : new NormalPass(scene, camera, { resolutionScale: 0.75 })
   const ssao = normalPass
     ? new SSAOEffect(camera, normalPass.texture, {
@@ -305,6 +307,12 @@ export async function startExperience(overlay: Overlay) {
       shown = lerp(shown, targetProgress, 0.08)
       if (!revealed) overlay.setProgress(shown)
       if (ready && shown > 0.985 && now - started > 550) reveal()
+      // A multisampled frame blocks the Draco worker messages, so the igloo
+      // decode never completes. The loader is up; draw once the mesh is in.
+      if (!ready) {
+        requestAnimationFrame(frame)
+        return
+      }
 
       const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight)
       const global = clamp(lenis.scroll / maxScroll, 0, 1)
@@ -318,6 +326,7 @@ export async function startExperience(overlay: Overlay) {
       scene.environmentIntensity =
         phase.screen === 'field' || phase.screen === 'rift' ? 0.28 : phase.screen === 'meteor' ? 1.15 : 0.85
 
+      if (ssao) ssao.intensity = phase.screen === 'field' && phase.solid < 0.12 ? 0 : 0.85
       igloo?.update(phase.burst, phase.solid, phase.dissolve, reducedMotion ? 0 : now / 1000)
       meteor.update(phase.meteorReveal, reducedMotion ? 0 : now / 1000)
       const clock = reducedMotion ? 0 : now / 1000
@@ -330,11 +339,14 @@ export async function startExperience(overlay: Overlay) {
       overlay.setUiDim(phase.screen === 'rings' ? 1 : 1 - phase.burst * 0.04)
       overlay.setScrollProgress(global)
 
-      const nav = phase.screen === 'rift' && massCopyVisible() ? 'meteor' : phase.screen
+      let nav: ScreenId = phase.screen
+      if (phase.screen === 'rift' && massCopyVisible()) nav = 'meteor'
+      if (phase.screen === 'meteor' && phase.meteorT > 0.88) nav = 'rings'
       if (nav !== screen) {
         screen = nav
         overlay.setActive(screen)
       }
+      fadeMeteorCopy(phase)
       if (!cornerPulsed && phase.burst > 0.04 && phase.screen === 'field') {
         cornerPulsed = true
         overlay.scrambleCorner()
@@ -349,13 +361,13 @@ export async function startExperience(overlay: Overlay) {
       const link = brand.links[linkIndex] ?? brand.links[0]
       overlay.setCycle(link.label, link.value, phase.cycle)
       overlay.setTelemetry(
-        igloo && phase.screen === 'field'
+        igloo && nav === 'field'
           ? igloo.readout(phase.burst, phase.solid)
-          : phase.screen === 'rift'
+          : nav === 'rift'
             ? 'RIFT'
-            : phase.screen === 'meteor'
+            : nav === 'meteor'
               ? 'MASS'
-              : phase.screen === 'rings'
+              : nav === 'rings'
                 ? 'RINGS'
                 : 'WITNESS',
         `${camera.position.x.toFixed(2)}   ${camera.position.y.toFixed(2)}   ${camera.position.z.toFixed(2)}`,
@@ -752,6 +764,18 @@ function crystalAimY(aspect: number, distance: number) {
   return meteorCenter.y - ndcY * distance * Math.tan(vHalf)
 }
 
+function fadeMeteorCopy(phase: Phase) {
+  const node = document.querySelector(".stage[data-screen='meteor'] .sticky")
+  if (!(node instanceof HTMLElement)) return
+  const fade =
+    phase.screen === 'meteor'
+      ? 1 - smoother(clamp((phase.meteorT - 0.7) / 0.16, 0, 1))
+      : phase.screen === 'rift'
+        ? 1
+        : 0
+  node.style.opacity = fade.toFixed(3)
+}
+
 function massCopyVisible() {
   const title = document.querySelector(".stage[data-screen='meteor'] h2")
   if (!(title instanceof HTMLElement)) return false
@@ -842,16 +866,18 @@ function projectLabels(
     const anchorY = (-ndc.y * 0.5 + 0.5) * height
     let labelX = clamp(anchorX + slot.offsetX * scale, 24, width - 24)
     let labelY = clamp(anchorY + slot.offsetY * scale, 24, height - 24)
+    let drop = false
     if (slot.bent && height > width) {
-      const left = slot.offsetX <= 0
-      const low = Math.abs(slot.offsetY) > 60
-      labelX = left ? width * 0.12 : width * 0.88
-      const yFrac = left ? (low ? 0.46 : 0.14) : low ? 0.5 : 0.26
-      labelY = height * yFrac
+      // Stay inside the column: below the header, above the copy, clear of the rail.
+      if (slot.text.trim().startsWith('FACE')) drop = true
+      const side = slot.offsetX <= 0 ? -1 : 1
+      labelX = clamp(anchorX + side * 46, width * 0.16, width * 0.78)
+      const yNudge = slot.offsetY > 50 ? 32 : slot.offsetY < -40 ? -26 : side < 0 ? -14 : 16
+      labelY = clamp(anchorY + yNudge, height * 0.22, height * 0.52)
     }
     const behind = ndc.z > 1
     const off = anchorX < -200 || anchorX > width + 200 || anchorY < -200 || anchorY > height + 200
-    const visible = !behind && !off && opacity > 0.02
+    const visible = !drop && !behind && !off && opacity > 0.02
     return {
       anchorX,
       anchorY,
@@ -860,11 +886,19 @@ function projectLabels(
       opacity: visible ? opacity : 0,
       text: slot.text,
       visible,
-      bent: slot.bent,
+      bent: slot.bent && height <= width,
       constellation: slot.constellation === true,
     }
   })
   overlay.updateLabels(views)
+}
+
+function softwareGpu(renderer: WebGLRenderer) {
+  const gl = renderer.getContext()
+  const info = gl.getExtension('WEBGL_debug_renderer_info')
+  if (!info) return false
+  const name = String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL) ?? '')
+  return /swiftshader|llvmpipe|softpipe|software/i.test(name)
 }
 
 function addLights(scene: Scene, shadows: boolean) {

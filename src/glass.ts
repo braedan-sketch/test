@@ -215,7 +215,9 @@ const ringsFragment = /* glsl */ `
 
         float film = ndv * 6.5 + n.y * 2.2 + n.x * 1.4;
         vec3 rainbow = 0.5 + 0.5 * cos(vec3(0.0, 2.09, 4.18) + film);
-        vec3 fringe = mix(vec3(1.0), rainbow, uFilm);
+        // Grazing rainbow changes within a pixel and aliases into a jagged rim.
+        float fringeAa = 1.0 - smoothstep(0.08, 0.55, fwidth(fresnel) + fwidth(film) * 0.15);
+        vec3 fringe = mix(vec3(1.0), rainbow, uFilm * fringeAa);
 
         vec3 body = mix(uAbsorb, uAbsorb * 2.4 + uCore * 0.18, ndv);
         vec3 color = body;
@@ -224,7 +226,7 @@ const ringsFragment = /* glsl */ `
         color += uCore * (0.08 + ndv * 0.12) * uFilm;
         color += spec * vec3(1.15, 1.12, 1.05);
         color += spec2 * vec3(0.45, 0.62, 0.85) * (0.35 + fresnel);
-        color += rainbow * fresnel * uFilm * 0.55;
+        color += rainbow * fresnel * uFilm * 0.55 * fringeAa;
         gl_FragColor = vec4(clamp(color, 0.0, 3.0), 1.0);
       }
 `

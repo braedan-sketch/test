@@ -184,14 +184,28 @@ function buildSilhouette(center: Vector3, radius: number) {
 }
 
 function brickEdges(piece: Piece) {
-  const source = new EdgesGeometry(piece.mesh.geometry, 22)
+  // 12° keeps bevelled wall courses. Wall edges run about 0.7–1.5m.
+  // The dome cap is a 3m disc; only its long chords read as slivers.
+  const source = new EdgesGeometry(piece.mesh.geometry, 12)
   const position = source.getAttribute('position')
   if (!position || position.count < 2) {
     source.dispose()
     return null
   }
-  const geometry = new LineSegmentsGeometry().fromEdgesGeometry(source)
+  const limit = piece.mesh.name === 'Dome Cap' ? 0.42 : 1.7
+  const kept: number[] = []
+  const a = new Vector3()
+  const b = new Vector3()
+  for (let i = 0; i < position.count; i += 2) {
+    a.fromBufferAttribute(position, i)
+    b.fromBufferAttribute(position, i + 1)
+    if (a.distanceTo(b) > limit) continue
+    kept.push(a.x, a.y, a.z, b.x, b.y, b.z)
+  }
   source.dispose()
+  if (kept.length < 6) return null
+  const geometry = new LineSegmentsGeometry()
+  geometry.setPositions(kept)
   return geometry
 }
 
@@ -391,11 +405,12 @@ export async function loadIgloo(
 
   const edgeMat = new LineMaterial({
     color: 0xffffff,
-    linewidth: 1.2,
+    linewidth: 1.25,
     transparent: true,
     opacity: 1,
     depthTest: true,
     depthWrite: false,
+    fog: false,
     worldUnits: false,
   })
   edgeMat.toneMapped = false
@@ -444,6 +459,27 @@ export async function loadIgloo(
       holder.add(edges)
     }
     shells.push({ piece, holder })
+  }
+  const homes: Array<{ mesh: Mesh; parent: Object3D }> = []
+  const parked = new Set<Mesh>()
+  for (const piece of pieces) {
+    const parent = piece.mesh.parent
+    if (parent) {
+      homes.push({ mesh: piece.mesh, parent })
+      parked.add(piece.mesh)
+    }
+  }
+  // Anything else that can still write colour (a mesh the edge pass skipped,
+  // the contact disc) leaves the graph for the wire hold too.
+  const extras: Mesh[] = []
+  group.traverse((object) => {
+    if (!asMesh(object) || parked.has(object)) return
+    if (object.name === 'brick-depth' || object.name === 'brick-edge') return
+    extras.push(object)
+  })
+  for (const mesh of extras) {
+    const parent = mesh.parent
+    if (parent) homes.push({ mesh, parent })
   }
 
   const coreMat = new ShaderMaterial({
@@ -560,11 +596,20 @@ export async function loadIgloo(
       guides.visible = false
       const showDepth = solid < 0.04 && dissolve < 0.2
       for (const depth of depthMeshes) depth.visible = showDepth
-      for (const piece of pieces) piece.mesh.visible = !showDepth
+      for (const home of homes) {
+        // Out of the graph entirely. visible=false still left the baked walls drawing on Metal.
+        if (showDepth) {
+          if (home.mesh.parent) home.mesh.removeFromParent()
+        } else if (!home.mesh.parent) {
+          home.parent.add(home.mesh)
+        }
+        home.mesh.visible = !showDepth
+      }
       const faceMat = bakedMaterial ?? procedural?.material ?? null
       if (faceMat) {
         faceMat.colorWrite = !showDepth
         faceMat.depthWrite = !showDepth
+        faceMat.fog = !showDepth
         faceMat.opacity = 1
       }
       edgeMat.opacity = (1 - smoother(Math.min(1, solid * 1.4))) * (1 - smoother(dissolve))

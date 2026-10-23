@@ -10,6 +10,7 @@ import {
   LineBasicMaterial,
   LineSegments,
   IcosahedronGeometry,
+  BackSide,
   Mesh,
   MeshBasicMaterial,
   MeshPhysicalMaterial,
@@ -80,7 +81,10 @@ function buildDotField() {
           float dot = 1.0 - smoothstep(0.08, 0.16, length(cell));
           vec3 paper = vec3(0.58, 0.59, 0.61);
           vec3 ink = vec3(0.28, 0.30, 0.33);
-          vec3 color = mix(paper, ink, dot * 0.85);
+          float behind = smoothstep(0.42, 0.0, length(vUv - 0.5));
+          paper = mix(paper, paper * 0.62, behind);
+          ink = mix(ink, ink * 0.45, behind);
+          vec3 color = mix(paper, ink, dot * 0.9);
           vec2 q = abs(vUv - 0.5) * 2.0;
           float edge = smoothstep(0.62, 1.0, max(q.x, q.y));
           color = mix(color, paper, edge);
@@ -192,7 +196,8 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
   const group = new Group()
   group.position.copy(CENTER)
   const dots = buildDotField()
-  group.add(crystal, dots, buildStreaks())
+  const streaks = buildStreaks()
+  group.add(crystal, dots, streaks)
 
   const core = new Mesh(
     new SphereGeometry(0.05, 16, 12),
@@ -234,9 +239,12 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
     core.visible = false
     if (sprite) sprite.visible = false
     const envMap = quality.physicalCrystal ? studioRoom(renderer) : null
+    const crystalMeshes: Mesh[] = []
     hero.traverse((object) => {
       const mesh = object as Mesh
-      if (!mesh.isMesh) return
+      if (mesh.isMesh) crystalMeshes.push(mesh)
+    })
+    for (const mesh of crystalMeshes) {
       const source = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
       const maps = source as {
         normalMap?: Texture | null
@@ -252,15 +260,15 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
           transmission: 1,
           thickness: 1.2,
           ior: 1.55,
-          dispersion: 0.4,
+          dispersion: 0.8,
           iridescence: 0.85,
           iridescenceIOR: 1.3,
           iridescenceThicknessRange: [180, 640],
           attenuationColor: new Color('#eef3f7'),
           attenuationDistance: 10,
-          specularIntensity: 1.15,
+          specularIntensity: 1.9,
           envMap,
-          envMapIntensity: 0.8,
+          envMapIntensity: 0.32,
           normalMap,
         })
         // The baked normal is heavy. A light scale keeps the chip without
@@ -281,27 +289,44 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
         previous.map = null
         previous.dispose()
       }
-    })
+    }
     fitHero(hero, 2.15)
-    const glowMap = glowTexture()
-    if (glowMap) {
-      const inner = new Sprite(
-        new SpriteMaterial({
-          map: glowMap,
-          color: '#f4f8fb',
+    for (const mesh of crystalMeshes) {
+      const shell = new Mesh(
+        mesh.geometry,
+        new MeshBasicMaterial({
+          color: '#ffffff',
           transparent: true,
-          opacity: 0.3,
-          blending: AdditiveBlending,
+          opacity: 0.6,
+          side: BackSide,
           depthWrite: false,
-          depthTest: false,
+          fog: false,
           toneMapped: false,
         }),
       )
-      inner.name = 'crystal-glow'
-      inner.scale.setScalar(0.36)
+      shell.name = 'crystal-rim'
+      shell.scale.setScalar(1.012)
+      shell.renderOrder = 3
+      mesh.add(shell)
+      const inner = new Mesh(
+        mesh.geometry,
+        new MeshBasicMaterial({
+          color: '#f4f8ff',
+          transparent: true,
+          opacity: 0.2,
+          blending: AdditiveBlending,
+          depthWrite: false,
+          depthTest: false,
+          fog: false,
+          toneMapped: false,
+        }),
+      )
+      inner.name = 'crystal-core'
+      inner.scale.setScalar(0.4)
       inner.renderOrder = 2
-      hero.add(inner)
+      mesh.add(inner)
     }
+    streaks.visible = false
     hero.rotation.y = 0.55
     group.add(hero)
     anchors = boxAnchors(hero)
@@ -318,7 +343,7 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
         hero.rotation.y = 0.55 + time * 0.22
         hero.rotation.z = Math.sin(time * 0.17) * 0.08
       }
-      light.intensity = 16 + shown * 44
+      light.intensity = 28 + shown * 78
       dots.visible = shown > 0.8
       if (sprite && sprite.visible) sprite.material.opacity = 0.16 + shown * 0.2
     },
@@ -342,9 +367,9 @@ function studioRoom(renderer: WebGLRenderer) {
   const room = new RoomEnvironment()
   // Hard rect lights so the ice catches a few white edges, not a flat studio wash.
   const strips: Array<[number, number, number, number, number, number, number]> = [
-    [7.2, 15.5, 9.4, 0.45, 6.4, 0.35, 12],
-    [-5.4, 19.2, 4.6, 9.5, 0.32, 0.28, 7],
-    [1.4, 7.2, 13.6, 4.2, 0.4, 0.22, 14],
+    [7.2, 15.5, 9.4, 0.45, 6.4, 0.35, 4],
+    [-5.4, 19.2, 4.6, 9.5, 0.32, 0.28, 2],
+    [1.4, 7.2, 13.6, 4.2, 0.4, 0.22, 5],
   ]
   for (const [x, y, z, sx, sy, sz, intensity] of strips) {
     const material = new MeshBasicMaterial({ toneMapped: false })
@@ -354,7 +379,7 @@ function studioRoom(renderer: WebGLRenderer) {
     room.add(strip)
   }
   const pmrem = new PMREMGenerator(renderer)
-  const texture = pmrem.fromScene(room, 0.04).texture
+  const texture = pmrem.fromScene(room, 0.28).texture
   pmrem.dispose()
   room.traverse((object) => {
     const mesh = object as Mesh
