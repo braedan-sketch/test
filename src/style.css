@@ -257,6 +257,13 @@ header {
   fill: none;
 }
 
+.leaders polyline.constellation {
+  stroke: rgba(255, 255, 255, 0.92);
+  stroke-width: 1;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
 .leaders circle { fill: white; }
 
 .tag {

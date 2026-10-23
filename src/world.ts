@@ -24,10 +24,10 @@ import {
 import { lerp } from './math'
 import type { Quality } from './quality'
 
-const FIELD = new Color('#b8bfc5')
-const VOID = new Color('#6d757b')
-const RINGS = new Color('#5c656c')
-const FIGURE = new Color('#d4dbe1')
+const FIELD = new Color('#7d868e')
+const VOID = new Color('#2c343c')
+const RINGS = new Color('#161b20')
+const FIGURE = new Color('#8e979f')
 
 // Camera looks from +Z, so the snow in front of the entrance is positive Z.
 const CRATERS: Array<[number, number, number, number]> = [
@@ -37,6 +37,8 @@ const CRATERS: Array<[number, number, number, number]> = [
   [-6.4, 12.4, 2.3, 0.34],
   [8.2, 14.2, 2.8, 0.46],
   [-1.4, 5.4, 1.35, 0.16],
+  [0.9, 3.8, 1.9, 0.62],
+  [-2.2, 6.8, 1.6, 0.48],
   [12.5, 9.4, 2.4, 0.3],
   [-11.2, 16.5, 3.2, 0.42],
 ]
@@ -58,6 +60,25 @@ const ROCKS: Array<[number, number, number, number]> = [
   [0.4, 19.2, 3.4, 0.9],
   [7.8, 4.6, 1.8, 0.46],
   [-6.8, 4.4, 1.9, 0.5],
+  [1.6, 4.6, 1.7, 0.55],
+  [-1.4, 5.8, 1.5, 0.42],
+  [3.0, 7.4, 1.9, 0.6],
+  [-2.8, 8.2, 1.6, 0.46],
+  [0.2, 9.6, 2.1, 0.64],
+]
+
+// Small stones in the foreground snow, in front of the entrance (+Z).
+const PEBBLES: Array<[number, number, number, number]> = [
+  [0.7, 3.4, 0.32, 0.11],
+  [-0.9, 3.1, 0.24, 0.08],
+  [1.8, 4.2, 0.38, 0.13],
+  [-1.6, 4.6, 0.28, 0.09],
+  [0.2, 5.2, 0.22, 0.07],
+  [2.6, 5.8, 0.3, 0.1],
+  [-2.4, 6.2, 0.34, 0.11],
+  [1.1, 6.8, 0.2, 0.06],
+  [-0.4, 2.6, 0.26, 0.08],
+  [3.1, 3.6, 0.36, 0.12],
 ]
 
 function smooth(edge0: number, edge1: number, value: number) {
@@ -77,14 +98,20 @@ export function sampleHeight(x: number, z: number) {
   height += ridge * far * (5.5 + Math.sin(ang * 1.15 + 0.4) * 2.4)
   for (const [cx, cz, rad, depth] of CRATERS) {
     const d = Math.hypot(x - cx, z - cz)
-    const bowl = Math.exp(-((d / rad) ** 2) * 1.8) * depth
-    const rim = Math.exp(-(((d - rad * 0.85) / (rad * 0.28)) ** 2)) * depth * 0.35
+    const bowl = Math.exp(-((d / rad) ** 2) * 1.8) * depth * 1.85
+    const rim = Math.exp(-(((d - rad * 0.85) / (rad * 0.28)) ** 2)) * depth * 0.7
     height += rim - bowl
   }
   for (const [cx, cz, rad, heightRock] of ROCKS) {
     const d = Math.hypot(x - cx, z - cz)
-    height += Math.exp(-((d / rad) ** 2) * 1.35) * heightRock
+    height += Math.exp(-((d / rad) ** 2) * 1.35) * heightRock * 1.3
   }
+  for (const [cx, cz, rad, heightRock] of PEBBLES) {
+    const d = Math.hypot(x - cx, z - cz)
+    height += Math.exp(-((d / rad) ** 2) * 1.6) * heightRock
+  }
+  // Screen-right is +X from this camera, so the snow rises that way.
+  height += x * 0.06 + Math.max(0, -z) * 0.015
   const pad = Math.exp(-radius * radius * 0.2)
   return height * (1 - pad * 0.97)
 }
@@ -116,9 +143,12 @@ export function createWorld(scene: Scene, quality: Quality): World {
     roughness: 1,
     metalness: 0,
   })
-  terrainMat.customProgramCacheKey = () => 'blendy-snow-v3'
+  terrainMat.customProgramCacheKey = () => 'blendy-snow-v6'
+  let terrainMood: { value: number } | null = null
   terrainMat.onBeforeCompile = (shader) => {
     shader.uniforms.uDetail = { value: detail }
+    shader.uniforms.uMood = { value: 0 }
+    terrainMood = shader.uniforms.uMood as { value: number }
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vRock;')
       .replace(
@@ -131,7 +161,8 @@ export function createWorld(scene: Scene, quality: Quality): World {
         '#include <common>',
         `#include <common>
         varying vec3 vRock;
-        uniform sampler2D uDetail;`,
+        uniform sampler2D uDetail;
+        uniform float uMood;`,
       )
       .replace(
         '#include <normal_fragment_begin>',
@@ -142,10 +173,12 @@ export function createWorld(scene: Scene, quality: Quality): World {
           vec4 b = texture2D(uDetail, xz * vec2(0.89, 0.81) + vec2(13.1, 4.4));
           float mask = texture2D(uDetail, xz * vec2(0.013, 0.017) + vec2(2.0, 6.0)).a;
           vec4 s = mix(a, b, smoothstep(0.25, 0.75, mask));
+          vec4 c = texture2D(uDetail, xz * 2.6 + vec2(3.2, 8.7));
           float fw = max(fwidth(xz.x), fwidth(xz.y));
           float fade = 1.0 - smoothstep(0.4, 2.4, fw * 8.0);
-          vec2 grad = (s.gb - 0.5) * fade;
-          normal = normalize(normal + vec3(-grad.x, 1.25, -grad.y) * 0.32);
+          float pebbleFade = 1.0 - smoothstep(0.12, 0.85, fw * 8.0);
+          vec2 grad = (s.gb - 0.5) * fade * 1.2 + (c.gb - 0.5) * pebbleFade * 0.95;
+          normal = normalize(normal + vec3(-grad.x, 0.5, -grad.y));
         }`,
       )
       .replace(
@@ -156,15 +189,30 @@ export function createWorld(scene: Scene, quality: Quality): World {
         vec4 b = texture2D(uDetail, xz * vec2(0.89, 0.81) + vec2(13.1, 4.4));
         float mask = texture2D(uDetail, xz * vec2(0.013, 0.017) + vec2(2.0, 6.0)).a;
         float grain = mix(a.r, b.r, smoothstep(0.25, 0.75, mask)) - 0.5;
+        float pebble = texture2D(uDetail, xz * 2.6 + vec2(3.2, 8.7)).r - 0.5;
+        float grit = texture2D(uDetail, xz * 0.2 + vec2(1.4, 2.7)).r;
         float fw = max(fwidth(xz.x), fwidth(xz.y));
         float fade = 1.0 - smoothstep(0.4, 2.4, fw * 8.0);
+        float pebbleFade = 1.0 - smoothstep(0.12, 0.85, fw * 8.0);
         float macro = sin(xz.x * 0.085 + 0.7) * sin(xz.y * 0.063 - 0.4);
         float broad = sin(xz.x * 0.027 + xz.y * 0.021 + 1.4);
-        float cover = macro * 0.55 + broad * 0.45;
-        vec3 snowCol = vec3(0.40, 0.43, 0.46);
-        vec3 rockCol = vec3(0.23, 0.25, 0.27);
-        diffuseColor.rgb = mix(snowCol, rockCol, smoothstep(-0.08, 0.66, cover));
-        diffuseColor.rgb *= 1.0 + grain * 0.08 * fade;`,
+        vec3 rockCol = vec3(0.008, 0.009, 0.011);
+        vec3 snowCol = vec3(0.055, 0.060, 0.066);
+        float cover = macro * 0.55 + broad * 0.35 + (grit - 0.5) * 1.35 + grain * fade * 0.7 + pebble * pebbleFade * 0.45;
+        diffuseColor.rgb = mix(rockCol, snowCol, smoothstep(-0.25, 0.45, cover));
+        diffuseColor.rgb *= 0.62 + grit * 0.85 + abs(grain) * fade * 0.45;
+        float voidMix = smoothstep(0.4, 1.0, uMood) * (1.0 - smoothstep(1.15, 1.55, uMood));
+        float ringsMix = smoothstep(1.35, 1.9, uMood) * (1.0 - smoothstep(2.05, 2.55, uMood));
+        vec2 cell = abs(fract(xz * 0.42) - 0.5);
+        float line = 1.0 - smoothstep(0.008, 0.028, min(cell.x, cell.y));
+        vec3 floorCol = vec3(0.045, 0.05, 0.055) + vec3(0.14, 0.16, 0.18) * line;
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.03, 0.033, 0.038), voidMix);
+        diffuseColor.rgb = mix(diffuseColor.rgb, floorCol, ringsMix);`,
+      )
+      .replace(
+        '#include <opaque_fragment>',
+        `#include <opaque_fragment>
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, floorCol, ringsMix);`,
       )
   }
   const terrain = new Mesh(geometry, terrainMat)
@@ -185,7 +233,9 @@ export function createWorld(scene: Scene, quality: Quality): World {
       fog.color.copy(color)
       fog.density = fogDensity(mood)
       if (skyMat) skyMat.uniforms.uMood!.value = mood
-      terrain.visible = mood < 0.45
+      if (terrainMood) terrainMood.value = mood
+      // Field snow hides as the rift opens. Rings bring the same mesh back as a dark grid floor.
+      terrain.visible = mood < 0.45 || (mood > 1.2 && mood < 2.6)
       snow.points.visible = mood < 0.85
       const attr = snow.points.geometry.getAttribute('position')
       if (attr && snow.points.visible) {
@@ -302,24 +352,25 @@ function buildSky() {
         float h = d.y;
         float ang = atan(d.z, d.x);
         float ridge = sin(ang * 1.7 + 0.4) * 0.62 + sin(ang * 3.4 + 1.1) * 0.34 + sin(ang * 6.6 + 0.3) * 0.16;
-        vec3 haze = vec3(0.48, 0.52, 0.56);
-        vec3 zenith = vec3(0.30, 0.36, 0.42);
-        vec3 field = mix(haze, zenith, smoothstep(0.02, 0.62, h));
-        float crest = 0.13 + ridge * 0.22;
-        float peaks = smoothstep(crest + 0.07, crest - 0.05, h);
-        float ridgeShade = 0.7 + 0.3 * sin(ang * 3.1 + 0.8);
-        vec3 ridgeCol = mix(haze, vec3(0.24, 0.28, 0.32), 0.7 * ridgeShade);
+        vec3 haze = vec3(0.26, 0.29, 0.32);
+        vec3 zenith = vec3(0.12, 0.14, 0.18);
+        vec3 field = mix(haze, zenith, smoothstep(0.0, 0.55, h));
+        float crest = 0.16 + ridge * 0.24;
+        float peaks = smoothstep(crest + 0.06, crest - 0.06, h);
+        float ridgeShade = 0.35 + 0.65 * sin(ang * 3.1 + 0.8);
+        vec3 ridgeCol = mix(vec3(0.20, 0.23, 0.26), vec3(0.08, 0.09, 0.11), ridgeShade);
         field = mix(field, ridgeCol, peaks * (1.0 - smoothstep(0.12, 1.15, uMood)));
-        vec3 voidCol = vec3(0.40, 0.43, 0.46);
+        vec3 voidCol = vec3(0.07, 0.08, 0.10);
         float grid = 0.0;
-        if (uMood > 0.45 && uMood < 1.6) {
-          vec2 cell = abs(fract(vec2(atan(d.z, d.x) * 8.0, h * 18.0)) - 0.5);
-          grid = 1.0 - smoothstep(0.04, 0.09, min(cell.x, cell.y));
-          voidCol += vec3(0.08) * grid;
+        if (uMood > 0.55 && uMood < 2.35) {
+          vec2 cell = abs(fract(vec2(atan(d.z, d.x) * 9.0, h * 16.0)) - 0.5);
+          grid = 1.0 - smoothstep(0.02, 0.055, min(cell.x, cell.y));
+          voidCol += vec3(0.028) * grid;
         }
         float down = smoothstep(0.35, -0.9, h);
-        vec3 rings = mix(vec3(0.34, 0.37, 0.40), vec3(0.22, 0.24, 0.27), down);
-        vec3 figure = vec3(0.66, 0.70, 0.75);
+        vec3 rings = mix(vec3(0.11, 0.12, 0.14), vec3(0.05, 0.055, 0.065), down);
+        rings += vec3(0.07) * grid;
+        vec3 figure = vec3(0.46, 0.49, 0.53);
         vec3 color = field;
         float m = clamp(uMood, 0.0, 3.0);
         color = mix(color, voidCol, clamp(m, 0.0, 1.0));
@@ -378,7 +429,7 @@ function fogColor(mood: number) {
 }
 
 function fogDensity(mood: number) {
-  if (mood <= 1) return lerp(0.014, 0.012, mood)
-  if (mood <= 2) return lerp(0.012, 0.004, mood - 1)
-  return lerp(0.004, 0.026, Math.min(1, mood - 2))
+  if (mood <= 1) return lerp(0.004, 0.006, mood)
+  if (mood <= 2) return lerp(0.006, 0.003, mood - 1)
+  return lerp(0.003, 0.001, Math.min(1, mood - 2))
 }

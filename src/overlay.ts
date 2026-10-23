@@ -10,6 +10,7 @@ export type ProjectedLabel = {
   text: string
   visible: boolean
   bent: boolean
+  constellation?: boolean
 }
 
 export type Overlay = {
@@ -162,6 +163,9 @@ export function mountOverlay(): Overlay {
     lineNodes.push(line)
     dotNodes.push(dot)
   }
+  const constellation = document.createElementNS(svgNs, 'polyline')
+  constellation.setAttribute('class', 'constellation')
+  leaders.append(constellation)
 
   let navigate: (id: string) => void = () => {}
   let toggleSound: () => boolean = () => false
@@ -253,6 +257,8 @@ export function mountOverlay(): Overlay {
       progress.style.transform = `scaleX(${Math.max(0, Math.min(1, value))})`
     },
     updateLabels(labels) {
+      const stars: string[] = []
+      let starOpacity = 0
       for (let i = 0; i < tagNodes.length; i += 1) {
         const label = labels[i]
         const tag = tagNodes[i]
@@ -284,6 +290,16 @@ export function mountOverlay(): Overlay {
         )
         dot.setAttribute('cx', label.anchorX.toFixed(1))
         dot.setAttribute('cy', label.anchorY.toFixed(1))
+        if (label.constellation) {
+          stars.push(`${label.anchorX.toFixed(1)},${label.anchorY.toFixed(1)}`)
+          starOpacity = Math.max(starOpacity, label.opacity)
+        }
+      }
+      if (stars.length >= 2) {
+        constellation.setAttribute('points', stars.join(' '))
+        constellation.style.opacity = starOpacity.toFixed(3)
+      } else {
+        constellation.style.opacity = '0'
       }
     },
     setCycle(kicker, value, opacity) {

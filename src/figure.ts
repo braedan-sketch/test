@@ -5,6 +5,8 @@ import {
   BufferGeometry,
   Float32BufferAttribute,
   Group,
+  CircleGeometry,
+  DoubleSide,
   Mesh,
   MeshBasicMaterial,
   NormalBlending,
@@ -125,7 +127,9 @@ export async function createFigure(quality: Quality): Promise<Figure> {
       float ndl = dot(n, normalize(vec3(0.55, 0.7, -0.28)));
       float wrap = clamp(ndl * 0.9 + 0.2, 0.0, 1.0);
       float under = smoothstep(0.3, -0.5, n.y);
-      vShade = clamp(mix(wrap, wrap * 0.42, under), 0.0, 1.0);
+      vec3 nView = normalize(mat3(normalMatrix) * normal);
+      float rim = pow(1.0 - clamp(abs(nView.z), 0.0, 1.0), 1.1);
+      vShade = clamp(max(mix(wrap, wrap * 0.42, under), rim), 0.0, 1.0);
         float gate = smoothstep(aSeed * 0.45, aSeed * 0.45 + 0.22, uAppear);
         vec3 p = position;
         float s = sin(uTime * 1.15 + aSeed * 40.0);
@@ -137,7 +141,7 @@ export async function createFigure(quality: Quality): Promise<Figure> {
         p.z += lift * (fract(aSeed * 13.7) - 0.5) * 0.42;
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
         gl_Position = projectionMatrix * mv;
-        gl_PointSize = clamp(uPixel * (10.0 / max(1.0, -mv.z)), 1.15, 2.4);
+        gl_PointSize = clamp(uPixel * (7.4 / max(1.0, -mv.z)), 1.05, 1.9);
         vAlpha = gate * (1.0 - smoothstep(0.35, 0.96, uBlow));
       }
     `,
@@ -151,20 +155,46 @@ export async function createFigure(quality: Quality): Promise<Figure> {
         if (r > 0.5) discard;
         float falloff = smoothstep(0.5, 0.12, r);
         vec3 color = mix(vec3(0.16, 0.19, 0.24), vec3(0.97, 0.98, 1.0), vShade);
-        gl_FragColor = vec4(color, falloff * vAlpha * 0.94);
+        gl_FragColor = vec4(color, falloff * vAlpha);
       }
     `,
   })
   let active = material
 
+  const plate = new Mesh(
+    new CircleGeometry(0.5, 64),
+    new MeshBasicMaterial({
+      color: '#f7fbff',
+      transparent: true,
+      opacity: 0.92,
+      side: DoubleSide,
+      toneMapped: false,
+    }),
+  )
+  plate.rotation.x = -Math.PI / 2
+  plate.position.y = 0.012
+  const plateGlow = new Mesh(
+    new CircleGeometry(0.66, 48),
+    new MeshBasicMaterial({
+      color: '#d5e6f4',
+      transparent: true,
+      opacity: 0.22,
+      blending: AdditiveBlending,
+      depthWrite: false,
+      side: DoubleSide,
+      toneMapped: false,
+    }),
+  )
+  plateGlow.rotation.x = -Math.PI / 2
+  plateGlow.position.y = 0.006
   const disc = new Mesh(
-    new TorusGeometry(0.5, 0.007, 12, 120),
-    new MeshBasicMaterial({ color: '#f7fbff', toneMapped: false }),
+    new TorusGeometry(0.64, 0.05, 16, 96),
+    new MeshBasicMaterial({ color: '#f4fbff', toneMapped: false }),
   )
   disc.rotation.x = Math.PI / 2
-  disc.position.y = 0.012
+  disc.position.y = 0.02
   const inner = new Mesh(
-    new TorusGeometry(0.34, 0.004, 8, 96),
+    new TorusGeometry(0.42, 0.012, 10, 80),
     new MeshBasicMaterial({
       color: '#ffffff',
       transparent: true,
@@ -176,7 +206,7 @@ export async function createFigure(quality: Quality): Promise<Figure> {
   inner.rotation.x = Math.PI / 2
   inner.position.y = 0.02
   const glow = new Mesh(
-    new TorusGeometry(0.5, 0.02, 8, 96),
+    new TorusGeometry(0.64, 0.07, 12, 80),
     new MeshBasicMaterial({
       color: '#d5e6f0',
       transparent: true,
@@ -188,7 +218,7 @@ export async function createFigure(quality: Quality): Promise<Figure> {
   )
   glow.rotation.x = Math.PI / 2
   glow.position.y = 0.01
-  root.add(disc, inner, glow)
+  root.add(plateGlow, plate, disc, inner, glow)
 
   const turn = new Group()
   root.add(turn)
@@ -221,6 +251,8 @@ export async function createFigure(quality: Quality): Promise<Figure> {
       active.uniforms.uTime!.value = time
       active.uniforms.uPixel!.value = pixelRatio
       const shown = appear * (1 - Math.min(1, blow * 1.4))
+      plate.visible = shown > 0.05
+      plateGlow.visible = shown > 0.05
       disc.visible = shown > 0.05
       inner.visible = shown > 0.05
       glow.visible = shown > 0.05

@@ -3,6 +3,7 @@ import {
   Box3,
   BufferAttribute,
   BufferGeometry,
+  EdgesGeometry,
   CanvasTexture,
   Float32BufferAttribute,
   Group,
@@ -36,12 +37,12 @@ import type { Quality } from './quality'
 const YAW = -0.42
 
 const LABEL_OFFSETS: Array<[number, number]> = [
-  [-58, -34],
-  [22, -46],
-  [64, -16],
-  [-72, 18],
-  [46, 28],
-  [78, 42],
+  [-14, -12],
+  [13, -14],
+  [15, 6],
+  [-16, 8],
+  [12, 14],
+  [-13, 2],
 ]
 
 export type LabelAnchor = {
@@ -50,6 +51,7 @@ export type LabelAnchor = {
   offsetX: number
   offsetY: number
   bent: boolean
+  constellation?: boolean
 }
 
 export type Igloo = {
@@ -198,7 +200,7 @@ function prepareBakedMaterial(root: Object3D, uniforms: BlockUniforms) {
   material.toneMapped = false
   if (material.map) material.map.colorSpace = SRGBColorSpace
   material.fog = true
-  material.customProgramCacheKey = () => 'blendy-baked-igloo-v2'
+  material.customProgramCacheKey = () => 'blendy-baked-igloo-v4'
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uSolid = uniforms.uSolid
     shader.uniforms.uDissolve = uniforms.uDissolve
@@ -228,11 +230,11 @@ function prepareBakedMaterial(root: Object3D, uniforms: BlockUniforms) {
         if (uSolid < 0.999 && vSeed > uSolid) discard;
         if (uDissolve > 0.001 && vSeed < uDissolve) discard;
         float luma = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
-        float knee = 0.56;
-        if (luma > knee) {
-          float over = luma - knee;
-          float compressed = knee + over / (1.0 + over * 4.8);
-          diffuseColor.rgb *= compressed / luma;
+        // Faces stay moody ice. Only the seam cracks climb past the bloom threshold.
+        diffuseColor.rgb *= mix(0.62, 0.92, smoothstep(0.12, 0.62, luma));
+        if (luma > 0.78) {
+          float hot = min(1.55, 0.78 + (luma - 0.78) * 3.4);
+          diffuseColor.rgb *= hot / max(luma, 0.001);
         }`,
       )
   }
@@ -362,6 +364,20 @@ export async function loadIgloo(
   const silhouette = buildSilhouette(core, radius)
   guides.add(silhouette)
   group.add(guides)
+  guides.visible = false
+
+  const edgeMat = new LineBasicMaterial({
+    color: '#f4f7f8',
+    transparent: true,
+    opacity: 0.92,
+    fog: false,
+    toneMapped: false,
+  })
+  for (const piece of pieces) {
+    const edges = new LineSegments(new EdgesGeometry(piece.mesh.geometry, 16), edgeMat)
+    edges.name = 'brick-edge'
+    piece.mesh.add(edges)
+  }
 
   const coreMat = new ShaderMaterial({
     transparent: true,
@@ -435,24 +451,24 @@ export async function loadIgloo(
   }
   mouth.addScaledVector(towardCam, 1.05)
   mouth.y = 0.16
-  const spill = new PointLight('#e7f1ff', 8, 9, 1.35)
-  spill.position.copy(mouth)
+  const spill = new PointLight('#d5e4f4', 1.1, 2.4, 2)
+  spill.position.set(mouth.x, 0.08, mouth.z)
   spill.castShadow = false
   group.add(spill)
   const spillSprite = new Sprite(
     new SpriteMaterial({
       map: glowMap ?? undefined,
       transparent: true,
-      opacity: 0.55,
+      opacity: 0.1,
       blending: AdditiveBlending,
       depthWrite: false,
-      depthTest: false,
+      depthTest: true,
       toneMapped: false,
-      color: '#f7fbff',
+      color: '#d7e4ee',
     }),
   )
-  spillSprite.position.set(mouth.x, 0.06, mouth.z)
-  spillSprite.scale.set(4.8, 2.2, 1)
+  spillSprite.position.set(mouth.x, 0.03, mouth.z)
+  spillSprite.scale.set(0.85, 0.32, 1)
   spillSprite.renderOrder = 2
   group.add(spillSprite)
 
@@ -474,7 +490,8 @@ export async function loadIgloo(
       uniforms.uSolid.value = solid
       uniforms.uDissolve.value = dissolve
       group.visible = dissolve < 0.985
-      guides.visible = solid < 0.42 && dissolve < 0.2
+      guides.visible = false
+      edgeMat.opacity = (1 - smoother(Math.min(1, solid * 1.4))) * (1 - smoother(dissolve)) * 0.92
 
       const open = burst * (1 - smoother(dissolve))
       const presence = (1 - smoother(dissolve)) * solid
@@ -488,9 +505,9 @@ export async function loadIgloo(
       })
       light.intensity = (0.35 + open * 7.5) * presence
       light.distance = 3.2 + open * 2.4
-      spill.intensity = (6.5 + open * 10) * presence
-      spill.distance = 8 + open * 2.5
-      ;(spillSprite.material as SpriteMaterial).opacity = (0.5 + open * 0.4) * presence
+      spill.intensity = (0.55 + open * 4.5) * presence
+      spill.distance = 1.6 + open * 1.8
+      ;(spillSprite.material as SpriteMaterial).opacity = (0.07 + open * 0.16) * presence
       ;(contact.material as MeshBasicMaterial).opacity = 0.78 * (1 - smoother(burst) * 0.45) * solid * (1 - dissolve)
 
       for (const piece of pieces) {
@@ -515,7 +532,10 @@ export async function loadIgloo(
         if (!piece || !slot) continue
         slot.position.copy(piece.localCenter).applyMatrix4(piece.mesh.matrixWorld)
         slot.text = piece.tag
-        slot.bent = true
+        slot.bent = false
+        slot.constellation = true
+        slot.offsetX = LABEL_OFFSETS[i]?.[0] ?? 12
+        slot.offsetY = LABEL_OFFSETS[i]?.[1] ?? -10
       }
     },
     readout(burst, solid) {
@@ -528,17 +548,18 @@ export async function loadIgloo(
 }
 
 function pickLabels(pieces: Piece[]) {
+  const toward = new Vector3(-0.12, 0, 1)
+  const front = pieces.filter((piece) => !piece.tunnel && piece.row >= 1 && piece.row <= 4)
+  front.sort((a, b) => b.localCenter.dot(toward) - a.localCenter.dot(toward))
+  const facing = front.slice(0, Math.min(front.length, 16))
+  facing.sort((a, b) => a.localCenter.x - b.localCenter.x)
   const chosen: Piece[] = []
-  for (const row of [5, 4, 3, 2, 1]) {
-    const pool = pieces.filter((piece) => !piece.tunnel && piece.row === row)
-    pool.sort((a, b) => b.localCenter.x + b.localCenter.z - (a.localCenter.x + a.localCenter.z))
-    const piece = pool[0]
-    if (piece) chosen.push(piece)
+  const count = Math.min(6, facing.length)
+  for (let i = 0; i < count; i += 1) {
+    const index = Math.round(((i + 0.5) * facing.length) / count - 0.5)
+    const piece = facing[Math.max(0, Math.min(facing.length - 1, index))]
+    if (piece && !chosen.includes(piece)) chosen.push(piece)
   }
-  const walls = pieces.filter((piece) => piece.tunnel && /wall/i.test(piece.mesh.name))
-  walls.sort((a, b) => b.localCenter.lengthSq() - a.localCenter.lengthSq())
-  const entry = walls[0]
-  if (entry) chosen.push(entry)
   return chosen
 }
 

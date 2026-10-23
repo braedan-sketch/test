@@ -120,7 +120,7 @@ export async function createRings(quality: Quality): Promise<Rings> {
       mesh.material.envMapIntensity = 1.35
       if ('emissive' in mesh.material && mesh.material.emissive instanceof Color && 'emissiveIntensity' in mesh.material) {
         mesh.material.emissive.set('#d5e6f2')
-        mesh.material.emissiveIntensity = 0.22
+        mesh.material.emissiveIntensity = 0.4
       }
       if (!quality.blockTransmission && 'transmission' in mesh.material) mesh.material.transmission = 0
     })

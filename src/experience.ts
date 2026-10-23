@@ -61,10 +61,9 @@ declare global {
 // Dome center after the group yaw and the ground lift. Overhead shot uses the footprint.
 const DOME_TARGET: readonly [number, number, number] = [0.05, 2.15, 0.12]
 const DOME_DIR: readonly [number, number, number] = [0.1, 1, 0.26]
-// Eye-level aim sits a little above the dome center so the mass reads lower-middle,
-// with the tunnel and a strip of foreground snow still inside the frame.
-const EYE_TARGET: readonly [number, number, number] = [0.06, 1.9, 0.05]
-const EYE_DIR: readonly [number, number, number] = [0.48, 0.34, 1.55]
+// Dome center. Direction is about 6° down so the camera sits low and close.
+const EYE_TARGET: readonly [number, number, number] = [0.02, 3.05, 0.04]
+const EYE_DIR: readonly [number, number, number] = [0.42, 0.17, 1.5]
 const CRYSTAL_DIR: readonly [number, number, number] = [0.22, 0.04, 1]
 // Upright bust, base on the ring at y 0, ears near y 2. Look slightly up at the chest.
 const FOX_TARGET: readonly [number, number, number] = [0.0, 1.02, 0.0]
@@ -303,7 +302,7 @@ export async function startExperience(overlay: Overlay) {
       figure.update(phase.figureAppear, phase.figureBlow, reducedMotion ? 0 : now / 1000, dpr)
 
       applyCamera(phase, pos, target, up, camera)
-      applyGrade(phase, bloom, chromatic, warp, tone, camera.aspect)
+      applyGrade(phase, bloom, chromatic, warp, tone, vignette, camera.aspect)
       overlay.setFlash(phase.flash * 0.35)
       overlay.setUiDim(phase.screen === 'rings' ? 1 : 1 - phase.burst * 0.04)
       overlay.setScrollProgress(global)
@@ -485,22 +484,22 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     else up.normalize()
     // Overhead dome is the ~5.1 footprint. fillH stays loose so width (35%) wins on both aspects.
     const dHigh = fitBox(5.15, 4.55, 0.34, 0.72, aspect, fov)
-    // Desktop is height-limited (~37% of the frame for the whole igloo). Portrait is width-limited (~75%).
+    // Visual mass, not the inflated bounds. Portrait ~83% of the width, desktop ~50% of the height.
     const span = phase.burst
-    const dEye = fitBox(lerp(5.3, 6.5, span), lerp(3.75, 5.15, span), 0.62, 0.28, aspect, fov)
+    const dEye = fitBox(lerp(4.15, 4.75, span), lerp(2.07, 2.7, span), 0.83, 0.5, aspect, fov)
     placeAlong(scratchA, DOME_TARGET, DOME_DIR, dHigh)
     placeAlong(scratchB, EYE_TARGET, EYE_DIR, dEye)
     pos.copy(scratchA).lerp(scratchB, dolly)
   } else if (phase.screen === 'rift') {
     fov = 36
     const crystalTarget: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
-    placeAlong(scratchA, EYE_TARGET, EYE_DIR, fitBox(6.5, 5.15, 0.62, 0.28, aspect, 40))
-    placeAlong(scratchB, crystalTarget, CRYSTAL_DIR, fitBox(1.9, 2.55, 0.78, 0.7, aspect, fov))
+    placeAlong(scratchA, EYE_TARGET, EYE_DIR, fitBox(4.75, 2.7, 0.83, 0.5, aspect, 40))
+    placeAlong(scratchB, crystalTarget, CRYSTAL_DIR, fitBox(1.9, 2.55, 0.9, 0.78, aspect, fov))
     mix3(target, EYE_TARGET, crystalTarget, smoother(phase.riftT))
     pos.copy(scratchA).lerp(scratchB, smoother(phase.riftT))
   } else if (phase.screen === 'meteor') {
     fov = 34
-    const hold = fitBox(1.9, 2.55, 0.78, 0.7, aspect, fov)
+    const hold = fitBox(1.9, 2.55, 0.9, 0.78, aspect, fov)
     const push = smoother(clamp((phase.meteorT - 0.62) / 0.38, 0, 1))
     const dist = lerp(hold, -0.35, push)
     target.set(meteorCenter.x, meteorCenter.y, meteorCenter.z)
@@ -521,8 +520,10 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
   } else {
     fov = 34
     const orbit = clamp(phase.figureT / 0.7, 0, 1)
-    // Bust is ~1.2 wide and 2.0 tall. Portrait height fill is 70%; width stays inside the frame.
-    const dist = fitBox(1.35, 2.08, 0.95, 0.58, aspect, fov)
+    // Portrait wants ~83% of the height, desktop ~75%. Height wins on both.
+    const fillH = aspect < 1 ? 0.88 : 0.84
+    const fillW = aspect < 1 ? 1.15 : 0.62
+    const dist = fitBox(1.18, 2.08, fillW, fillH, aspect, fov)
     const yaw = lerp(-0.02, 0.05, orbit)
     const dir: [number, number, number] = [
       FOX_DIR[0] * Math.cos(yaw) - FOX_DIR[2] * Math.sin(yaw),
@@ -636,15 +637,15 @@ function applyGrade(
   chromatic: ChromaticAberrationEffect,
   warp: WarpEffect,
   tone: ToneMappingEffect,
+  vignette: VignetteEffect,
   aspect: number,
 ) {
   const burst = phase.screen === 'field' ? phase.burst : 0
   let intensity = 0.08 + burst * 0.28
   let threshold = 0.97
   if (phase.screen === 'field') {
-    // The baked crown is already bright. Keep bloom on the entrance spill, not the slabs.
-    intensity = 0.04 + phase.solid * 0.16 + burst * 0.34
-    threshold = 0.84
+    intensity = 0.1 + phase.solid * 0.62 + burst * 0.4
+    threshold = 0.7
   }
   const toneBlend = phase.screen === 'field' ? BlendFunction.SKIP : BlendFunction.SRC
   if (tone.blendMode.blendFunction !== toneBlend) tone.blendMode.blendFunction = toneBlend
@@ -659,6 +660,9 @@ function applyGrade(
   if (phase.white > 0.4) intensity += 0.22
   bloom.intensity = intensity
   bloom.luminanceMaterial.threshold = threshold
+  const figure = phase.screen === 'figure'
+  vignette.darkness = figure ? 0.5 : 0.22
+  vignette.offset = figure ? 0.28 : 0.42
   const fringe = phase.chroma > 0.02 ? phase.chroma * 0.011 : 0
   chromatic.offset.set(fringe, fringe * 0.62)
   warp.setWarp(phase.ripple, phase.blur, phase.glitch, phase.white, phase.riftT + phase.figureT, aspect)
@@ -704,6 +708,7 @@ function projectLabels(
       text: slot.text,
       visible,
       bent: slot.bent,
+      constellation: slot.constellation === true,
     }
   })
   overlay.updateLabels(views)
