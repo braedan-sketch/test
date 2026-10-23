@@ -1,4 +1,4 @@
-import { Color, MeshPhysicalMaterial, Vector3 } from 'three'
+import { Color, MeshStandardMaterial, Vector3 } from 'three'
 import type { Quality } from './quality'
 
 export const NOISE = /* glsl */ `
@@ -42,33 +42,22 @@ export function createBlockMaterial(quality: Quality) {
     uCenter: { value: new Vector3() },
   }
 
-  const frost = { value: quality.blockTransmission ? 0.18 : 0.08 }
-  const material = new MeshPhysicalMaterial({
-    color: new Color('#d0dae2'),
-    roughness: 0.72,
+  const material = new MeshStandardMaterial({
+    color: new Color('#96a4b0'),
+    roughness: 0.92,
     metalness: 0,
-    transmission: quality.blockTransmission ? 0.12 : 0,
-    thickness: quality.blockTransmission ? 0.55 : 0,
-    ior: 1.31,
-    attenuationColor: new Color('#d5e6f4'),
-    attenuationDistance: 1.4,
-    clearcoat: 0.04,
-    clearcoatRoughness: 0.72,
-    sheen: 0.18,
-    sheenColor: new Color('#f7fbff'),
-    sheenRoughness: 0.84,
-    envMapIntensity: 0.85,
+    envMapIntensity: 0.22,
     emissive: new Color('#000000'),
     emissiveIntensity: 1,
   })
+  void quality
 
-  material.customProgramCacheKey = () => 'blendy-block-v7'
+  material.customProgramCacheKey = () => 'blendy-block-v13'
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uBurst = uniforms.uBurst
     shader.uniforms.uSolid = uniforms.uSolid
     shader.uniforms.uDissolve = uniforms.uDissolve
     shader.uniforms.uCenter = uniforms.uCenter
-    shader.uniforms.uFrost = frost
 
     shader.vertexShader = shader.vertexShader
       .replace(
@@ -79,11 +68,13 @@ export function createBlockMaterial(quality: Quality) {
         varying float vSeed;
         varying float vRow;
         varying vec3 vWPos;
+        varying vec3 vGeoN;
         ${NOISE}`,
       )
       .replace(
         '#include <beginnormal_vertex>',
         `#include <beginnormal_vertex>
+        vGeoN = normalize(mat3(modelMatrix) * objectNormal);
         {
           vec3 np = position * 42.0 + vec3(aSeed * 19.0);
           float e = 0.7;
@@ -98,7 +89,7 @@ export function createBlockMaterial(quality: Quality) {
           float fy = blNoise(fineP + vec3(0.0, e, 0.0));
           float fz = blNoise(fineP + vec3(0.0, 0.0, e));
           grain += vec3(f0 - fx, f0 - fy, f0 - fz) * 0.45;
-          objectNormal = normalize(objectNormal + grain * 0.55);
+          objectNormal = normalize(objectNormal + grain * 0.16);
         }`,
       )
       .replace(
@@ -116,11 +107,11 @@ export function createBlockMaterial(quality: Quality) {
         varying float vSeed;
         varying float vRow;
         varying vec3 vWPos;
+        varying vec3 vGeoN;
         uniform float uBurst;
         uniform float uSolid;
         uniform float uDissolve;
         uniform vec3 uCenter;
-        uniform float uFrost;
         ${NOISE}`,
       )
       .replace(
@@ -138,33 +129,30 @@ export function createBlockMaterial(quality: Quality) {
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
-        float chip = blNoise(vWPos * 9.0 + vSeed * 4.0);
-        float pit = smoothstep(0.62, 0.18, chip);
-        diffuseColor.rgb *= mix(vec3(0.96, 0.98, 1.0), vec3(1.06, 1.07, 1.08), chip);
-        diffuseColor.rgb *= mix(vec3(1.0), vec3(0.72, 0.76, 0.8), pit * 0.55);
-        diffuseColor.rgb *= mix(vec3(0.98, 0.99, 1.0), vec3(1.02, 1.03, 1.04), vSeed);`,
+        float chip = blNoise(vWPos * 8.0 + vSeed * 4.0);
+        float pit = smoothstep(0.58, 0.16, chip);
+        diffuseColor.rgb *= mix(vec3(0.78, 0.8, 0.84), vec3(1.05, 1.06, 1.08), chip);
+        diffuseColor.rgb *= mix(1.0, 0.82, pit);`,
       )
       .replace(
         '#include <roughnessmap_fragment>',
         `#include <roughnessmap_fragment>
-        float grain = blNoise(vWPos * 18.0 + vSeed * 6.0);
-        roughnessFactor = clamp(0.62 + (grain - 0.5) * 0.28 + (vSeed - 0.5) * 0.08, 0.48, 0.96);`,
+        roughnessFactor = 1.0;`,
       )
       .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
-        vec3 N = normalize(normal);
-        float seam = pow(clamp(length(fwidth(N)) * 2.4, 0.0, 1.0), 1.35);
-        vec3 Nw = inverseTransformDirection(N, viewMatrix);
+        vec3 geoN = normalize(vGeoN);
         vec3 toCore = uCenter - vWPos;
-        float coreDist = length(toCore);
-        float inward = max(dot(Nw, toCore / max(coreDist, 0.001)), 0.0);
-        float proximity = smoothstep(4.2, 0.35, coreDist);
-        diffuseColor.rgb *= mix(1.0, 0.78, seam);
-        totalEmissiveRadiance += vec3(0.82, 0.9, 1.0) * seam * (0.85 + uBurst * 3.4);
-        totalEmissiveRadiance += vec3(0.72, 0.84, 1.0) * inward * proximity * (0.35 + uBurst * 1.8);
-        totalEmissiveRadiance += vec3(0.7, 0.82, 0.95) * uFrost * inward * 0.45;
-        totalEmissiveRadiance += vec3(0.85, 0.92, 1.0) * smoothstep(3.55, 4.85, vRow) * 0.06;`,
+        float coreDist = max(length(toCore), 0.001);
+        float facingIn = max(dot(geoN, toCore / coreDist), 0.0);
+        float cavity = smoothstep(0.45, 0.9, facingIn);
+        float proximity = smoothstep(4.2, 0.4, coreDist);
+        totalEmissiveRadiance += vec3(1.8, 2.05, 2.35) * cavity * proximity * (1.15 + uBurst * 0.7);`,
+      )
+      .replace(
+        'vec3 totalSpecular = reflectedLight.directSpecular + reflectedLight.indirectSpecular;',
+        'vec3 totalSpecular = vec3(0.0);',
       )
   }
 

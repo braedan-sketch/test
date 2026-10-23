@@ -5,8 +5,10 @@ import {
   EffectComposer,
   EffectPass,
   NoiseEffect,
+  NormalPass,
   RenderPass,
   SMAAEffect,
+  SSAOEffect,
   SMAAPreset,
   ToneMappingEffect,
   ToneMappingMode,
@@ -18,7 +20,7 @@ import {
   HemisphereLight,
   Mesh,
   NoToneMapping,
-  PCFShadowMap,
+  PCFSoftShadowMap,
   PerspectiveCamera,
   PMREMGenerator,
   Scene,
@@ -60,8 +62,8 @@ declare global {
 const DOME_TARGET: readonly [number, number, number] = [0.05, 2.15, 0.12]
 const DOME_DIR: readonly [number, number, number] = [0.1, 1, 0.26]
 // Eye-level center of the stone dome, camera in front and slightly above.
-const EYE_TARGET: readonly [number, number, number] = [0.12, 1.55, 0.22]
-const EYE_DIR: readonly [number, number, number] = [1.25, 0.46, 1.4]
+const EYE_TARGET: readonly [number, number, number] = [0.18, 1.42, 0.08]
+const EYE_DIR: readonly [number, number, number] = [0.55, 0.28, 1.5]
 const CRYSTAL_DIR: readonly [number, number, number] = [0.22, 0.04, 1]
 // Seated fox: hips on the ring, head near y 1.3, tail off to +X.
 const FOX_TARGET: readonly [number, number, number] = [0.04, 0.82, 0.12]
@@ -87,18 +89,19 @@ export async function startExperience(overlay: Overlay) {
 
   renderer.outputColorSpace = SRGBColorSpace
   renderer.toneMapping = NoToneMapping
+  renderer.toneMappingExposure = 0.9
   renderer.transmissionResolutionScale = quality.low ? 0.35 : 0.5
   renderer.setClearColor('#c5c8cc', 1)
   if (quality.shadows) {
     renderer.shadowMap.enabled = true
-    renderer.shadowMap.type = PCFShadowMap
+    renderer.shadowMap.type = PCFSoftShadowMap
   }
 
   const scene = new Scene()
   const camera = new PerspectiveCamera(40, 1, 0.08, 280)
   const world = createWorld(scene, quality)
   scene.environment = createEnvironment(renderer)
-  scene.environmentIntensity = 1
+  scene.environmentIntensity = 0.35
   addLights(scene, quality.shadows)
 
   const composer = new EffectComposer(renderer, {
@@ -106,11 +109,11 @@ export async function startExperience(overlay: Overlay) {
     multisampling: 0,
   })
   const bloom = new BloomEffect({
-    intensity: 0.4,
-    luminanceThreshold: 0.72,
-    luminanceSmoothing: 0.2,
+    intensity: 0.15,
+    luminanceThreshold: 0.92,
+    luminanceSmoothing: 0.25,
     mipmapBlur: true,
-    radius: 0.68,
+    radius: 0.45,
   })
   const chromatic = new ChromaticAberrationEffect({
     offset: new Vector2(0.0004, 0.0002),
@@ -125,7 +128,24 @@ export async function startExperience(overlay: Overlay) {
   noise.blendMode.setOpacity(0.045)
   const vignette = new VignetteEffect({ darkness: 0.22, offset: 0.42 })
   const smaa = quality.smaa ? new SMAAEffect({ preset: SMAAPreset.MEDIUM }) : null
+  const normalPass = quality.low ? null : new NormalPass(scene, camera, { resolutionScale: 0.75 })
+  const ssao = normalPass
+    ? new SSAOEffect(camera, normalPass.texture, {
+        samples: 16,
+        rings: 7,
+        radius: 0.055,
+        intensity: 0.85,
+        bias: 0.05,
+        fade: 0.012,
+        luminanceInfluence: 0.35,
+        resolutionScale: 0.75,
+      })
+    : null
   composer.addPass(new RenderPass(scene, camera))
+  if (normalPass && ssao) {
+    composer.addPass(normalPass)
+    composer.addPass(new EffectPass(camera, ssao))
+  }
   composer.addPass(new EffectPass(camera, bloom))
   composer.addPass(new EffectPass(camera, warp))
   composer.addPass(new EffectPass(camera, chromatic))
@@ -269,7 +289,7 @@ export async function startExperience(overlay: Overlay) {
       clear.copy(world.fog.color)
       renderer.setClearColor(clear, 1)
       scene.environmentIntensity =
-        phase.screen === 'field' || phase.screen === 'rift' ? 1 : phase.screen === 'meteor' ? 0.85 : 0.55
+        phase.screen === 'field' || phase.screen === 'rift' ? 0.32 : phase.screen === 'meteor' ? 0.7 : 0.45
 
       igloo?.update(phase.burst, phase.solid, phase.dissolve, reducedMotion ? 0 : now / 1000)
       meteor.update(phase.meteorReveal)
@@ -451,7 +471,7 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
   let fov = 40
   if (phase.screen === 'field' || (phase.screen === 'rift' && phase.riftT < 0.02)) {
     fov = 40
-    const dolly = smoother(clamp(phase.fieldT / 0.42, 0, 1))
+    const dolly = smoother(clamp(phase.fieldT / 0.18, 0, 1))
     mix3(target, DOME_TARGET, EYE_TARGET, dolly)
     // Looking down the Y axis: world up is parallel to the view, which throws the dome into a corner.
     up.set(0, dolly, -(1 - dolly))
@@ -461,14 +481,14 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     const dHigh = fitBox(5.15, 4.55, 0.34, 0.72, aspect, fov)
     // Box grows with the drift so the solid dome and the opened dome both land near 75% width.
     const span = phase.burst
-    const dEye = fitBox(lerp(5.15, 5.7, span), lerp(3.9, 4.2, span), 0.96, 0.62, aspect, fov)
+    const dEye = fitBox(lerp(5.2, 5.55, span), lerp(3.55, 3.75, span), 0.74, 0.46, aspect, fov)
     placeAlong(scratchA, DOME_TARGET, DOME_DIR, dHigh)
     placeAlong(scratchB, EYE_TARGET, EYE_DIR, dEye)
     pos.copy(scratchA).lerp(scratchB, dolly)
   } else if (phase.screen === 'rift') {
     fov = 36
     const crystalTarget: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
-    placeAlong(scratchA, EYE_TARGET, EYE_DIR, fitBox(5.7, 4.2, 0.96, 0.62, aspect, 40))
+    placeAlong(scratchA, EYE_TARGET, EYE_DIR, fitBox(5.55, 3.75, 0.74, 0.46, aspect, 40))
     placeAlong(scratchB, crystalTarget, CRYSTAL_DIR, fitBox(1.9, 2.55, 0.61, 0.58, aspect, fov))
     mix3(target, EYE_TARGET, crystalTarget, smoother(phase.riftT))
     pos.copy(scratchA).lerp(scratchB, smoother(phase.riftT))
@@ -541,8 +561,8 @@ function applyGrade(
   aspect: number,
 ) {
   const burst = phase.screen === 'field' ? phase.burst : 0
-  let intensity = 0.2 + burst * 0.45
-  let threshold = 0.92
+  let intensity = 0.08 + burst * 0.28
+  let threshold = 0.97
   if (phase.screen === 'field' && phase.solid < 0.55) {
     intensity = 0.08
     threshold = 0.96
@@ -609,14 +629,15 @@ function projectLabels(
 }
 
 function addLights(scene: Scene, shadows: boolean) {
-  scene.add(new HemisphereLight('#f4f8fc', '#b7c4ce', 0.95))
-  const key = new DirectionalLight('#f7fbff', 0.72)
-  key.position.set(-7.2, 12, 8)
+  scene.add(new HemisphereLight('#d5dee6', '#6d777f', 0.38))
+  const key = new DirectionalLight('#f4f7f8', 2.75)
+  key.position.set(-6.5, 12.5, 9.5)
   key.target.position.set(0.1, 1.2, 0)
   scene.add(key, key.target)
   if (shadows) {
     key.castShadow = true
-    key.shadow.mapSize.set(1024, 1024)
+    key.shadow.mapSize.set(2048, 2048)
+    key.shadow.radius = 2.5
     const shadow = key.shadow.camera
     shadow.near = 2
     shadow.far = 36
@@ -627,8 +648,8 @@ function addLights(scene: Scene, shadows: boolean) {
     key.shadow.bias = -0.0004
     key.shadow.normalBias = 0.03
   }
-  const fill = new DirectionalLight('#e7f0f6', 0.22)
-  fill.position.set(6.2, 4.2, 7)
+  const fill = new DirectionalLight('#c5d0da', 0.16)
+  fill.position.set(7.5, 3.2, 6)
   scene.add(fill)
 }
 
@@ -649,9 +670,9 @@ function createEnvironment(renderer: WebGLRenderer) {
       void main() {
         vec3 direction = normalize(vDir);
         float height = direction.y;
-        vec3 ground = vec3(0.62, 0.66, 0.7);
-        vec3 horizon = vec3(0.94, 0.96, 0.98);
-        vec3 zenith = vec3(0.78, 0.84, 0.9);
+        vec3 ground = vec3(0.18, 0.2, 0.22);
+        vec3 horizon = vec3(0.42, 0.46, 0.5);
+        vec3 zenith = vec3(0.28, 0.32, 0.38);
         vec3 color = mix(ground, horizon, smoothstep(-0.35, 0.08, height));
         color = mix(color, zenith, smoothstep(0.05, 0.7, height));
         float sun = pow(max(dot(direction, normalize(vec3(-0.2, 0.86, 0.25))), 0.0), 18.0);

@@ -278,7 +278,7 @@ export async function loadIgloo(
       map: shadowMap ?? undefined,
       transparent: true,
       depthWrite: false,
-      color: '#ffffff',
+      color: '#1a2228',
     }),
   )
   contact.rotation.x = -Math.PI / 2
@@ -295,7 +295,6 @@ export async function loadIgloo(
     transparent: true,
     depthWrite: false,
     blending: AdditiveBlending,
-    toneMapped: false,
     uniforms: { uGlow: { value: 0 } },
     vertexShader: /* glsl */ `
       varying vec3 vLocal;
@@ -313,7 +312,7 @@ export async function loadIgloo(
         float body = exp(-r * r * 2.2);
         float haze = exp(-r * r * 0.75);
         float alpha = (hot * 0.95 + body * 0.45 + haze * 0.18) * uGlow;
-        vec3 color = vec3(1.0) * (hot * 2.4 + body * 0.85 + haze * 0.2) * uGlow;
+        vec3 color = vec3(0.75, 0.86, 1.0) * (hot * 1.15 + body * 0.35) * uGlow;
         if (alpha < 0.004) discard;
         gl_FragColor = vec4(color, alpha);
       }
@@ -325,7 +324,7 @@ export async function loadIgloo(
   coreMesh.renderOrder = 3
   group.add(coreMesh)
 
-  const glowLayers = (quality.sprites ? [0.7, 1.6, 3.1] : [0.9]).map((scale, index) => {
+  const glowLayers = (quality.sprites ? [0.45, 0.9] : [0.55]).map((scale) => {
     const spriteMat = new SpriteMaterial({
       map: glowMap ?? undefined,
       transparent: true,
@@ -333,9 +332,9 @@ export async function loadIgloo(
       blending: AdditiveBlending,
       depthWrite: false,
       depthTest: true,
-      toneMapped: false,
+      toneMapped: true,
     })
-    spriteMat.color.setRGB(1.4 - index * 0.08, 1.35 - index * 0.08, 1.3)
+    spriteMat.color.setRGB(0.75, 0.84, 0.95)
     const sprite = new Sprite(spriteMat)
     sprite.position.copy(core)
     sprite.scale.setScalar(scale)
@@ -368,17 +367,18 @@ export async function loadIgloo(
       group.visible = dissolve < 0.985
       guides.visible = solid < 0.42 && dissolve < 0.2
 
-      const glow = (0.45 + burst * 0.55) * (1 - smoother(dissolve))
+      const glow = burst * (1 - smoother(dissolve))
       coreMat.uniforms.uGlow.value = glow
-      coreMesh.scale.setScalar(0.55 + glow * 0.7)
+      coreMesh.scale.setScalar(0.18 + glow * 0.28)
       glowLayers.forEach((layer, index) => {
-        const weight = index === 0 ? 0.34 : index === 1 ? 0.16 : 0.07
+        const weight = index === 0 ? 0.22 : index === 1 ? 0.08 : 0.03
         layer.material.opacity = glow * weight
-        layer.sprite.scale.setScalar(layer.scale * (0.7 + glow * 0.45))
+        layer.material.toneMapped = true
+        layer.sprite.scale.setScalar(layer.scale * (0.35 + glow * 0.25))
       })
-      light.intensity = 2.4 + glow * 16
-      light.distance = 6.5 + glow * 2.5
-      ;(contact.material as MeshBasicMaterial).opacity = (1 - smoother(burst)) * solid * (1 - dissolve)
+      light.intensity = 0.25 + glow * 5.5
+      light.distance = 2.6 + glow * 1.4
+      ;(contact.material as MeshBasicMaterial).opacity = 0.78 * (1 - smoother(burst) * 0.45) * solid * (1 - dissolve)
 
       for (const piece of pieces) {
         const span = Math.max(0.001, 1 - piece.delay)
