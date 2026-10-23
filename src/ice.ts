@@ -194,8 +194,8 @@ export function createIceSlabMaterial(uniforms: BlockUniforms) {
         float rim = pow(1.0 - ndv, 2.4);
         float grit = fract(sin(dot(vWorld.xyz, vec3(17.1, 39.4, 9.2))) * 43758.5);
         float vein = smoothstep(0.42, 0.7, fract(sin(dot(floor(vWorld * 6.5), vec3(12.9, 78.2, 45.1))) * 12543.2));
-        vec3 deep = vec3(0.5, 0.58, 0.66);
-        vec3 milk = vec3(0.78, 0.84, 0.89);
+        vec3 deep = vec3(0.16, 0.2, 0.26);
+        vec3 milk = vec3(0.48, 0.56, 0.64);
         vec3 color = mix(deep, milk, pow(ndv, 0.4));
         color *= 0.92 + grit * 0.1;
         color = mix(color, vec3(0.86, 0.92, 0.97), vein * 0.22);

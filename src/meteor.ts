@@ -13,6 +13,7 @@ import {
   MeshBasicMaterial,
   MeshPhysicalMaterial,
   PlaneGeometry,
+  PMREMGenerator,
   PointLight,
   ShaderMaterial,
   SphereGeometry,
@@ -22,10 +23,13 @@ import {
   Texture,
   Vector2,
   Vector3,
+  BoxGeometry,
+  type WebGLRenderer,
 } from 'three'
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { brand } from './brand'
 import { hash01 } from './math'
-import { createGlassMaterial, studioCubemap } from './glass'
+import { createGlassMaterial } from './glass'
 import { fitHero, loadHero } from './heroModel'
 import type { LabelAnchor } from './igloo'
 import type { Quality } from './quality'
@@ -146,7 +150,7 @@ function glowTexture() {
   return map
 }
 
-export async function createMeteor(quality: Quality): Promise<Meteor> {
+export async function createMeteor(quality: Quality, renderer: WebGLRenderer): Promise<Meteor> {
   const geometry = new IcosahedronGeometry(1, quality.low ? 2 : 3)
   const position = geometry.attributes.position
   if (!position) throw new Error('Crystal is missing positions')
@@ -241,7 +245,7 @@ export async function createMeteor(quality: Quality): Promise<Meteor> {
     crystal.visible = false
     core.visible = false
     if (sprite) sprite.visible = false
-    const envMap = quality.physicalCrystal ? studioCubemap() : null
+    const envMap = quality.physicalCrystal ? studioRoom(renderer) : null
     const crystalMeshes: Mesh[] = []
     hero.traverse((object) => {
       const mesh = object as Mesh
@@ -256,9 +260,27 @@ export async function createMeteor(quality: Quality): Promise<Meteor> {
       }
       const normalMap = maps.normalMap ?? null
       if (envMap) {
+        const physical = new MeshPhysicalMaterial({
+          color: new Color('#ffffff'),
+          roughness: 0.06,
+          metalness: 0,
+          transmission: 1,
+          thickness: 1.35,
+          ior: 1.52,
+          dispersion: 0.28,
+          iridescence: 0,
+          attenuationColor: new Color('#b7c6d2'),
+          attenuationDistance: 1.8,
+          specularIntensity: 1.9,
+          envMap,
+          envMapIntensity: 0.32,
+          normalMap,
+        })
+        physical.normalScale.set(0.08, 0.08)
+        crystalEdge(physical)
         mesh.castShadow = false
         mesh.receiveShadow = false
-        mesh.material = cloudyCrystalMaterial(envMap)
+        mesh.material = physical
       } else {
         mesh.material = createGlassMaterial({
           normalMap,
@@ -316,7 +338,7 @@ export async function createMeteor(quality: Quality): Promise<Meteor> {
           vec3 v = vLen > 1e-5 ? toView / vLen : vec3(0.0, 0.0, 1.0);
           float facing = smoothstep(0.12, 0.7, clamp(dot(n, v), 0.0, 1.0));
           float glow = radial * facing;
-          gl_FragColor = vec4(vec3(0.72, 0.84, 1.0), glow * 0.22);
+          gl_FragColor = vec4(vec3(0.86, 0.92, 1.0), glow * 0.32);
         }
       `,
     })
@@ -324,7 +346,7 @@ export async function createMeteor(quality: Quality): Promise<Meteor> {
       const inner = new Mesh(mesh.geometry, glowMat)
       inner.name = 'crystal-core'
       // Inner 40% only. The outer 60% is the glass, with no glow mesh on it.
-      inner.scale.setScalar(0.52)
+      inner.scale.setScalar(0.46)
       inner.renderOrder = 3
       inner.layers.set(1)
       inner.frustumCulled = false
@@ -368,54 +390,51 @@ export async function createMeteor(quality: Quality): Promise<Meteor> {
   }
 }
 
-/** Thick cloudy crystal. Fake refraction, no transmission pass, a soft inclusion. */
-function cloudyCrystalMaterial(envMap: Texture) {
-  return new ShaderMaterial({
-    fog: false,
-    toneMapped: true,
-    uniforms: { uEnv: { value: envMap } },
-    vertexShader: /* glsl */ `
-      varying vec3 vWorld;
-      varying vec3 vNormal;
-      varying vec3 vObj;
-      void main() {
-        vObj = position;
-        vec4 world = modelMatrix * vec4(position, 1.0);
-        vWorld = world.xyz;
-        vNormal = normalize(mat3(modelMatrix) * normal);
-        gl_Position = projectionMatrix * viewMatrix * world;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      uniform samplerCube uEnv;
-      varying vec3 vWorld;
-      varying vec3 vNormal;
-      varying vec3 vObj;
-      void main() {
-        vec3 n = normalize(vNormal);
-        vec3 viewDelta = cameraPosition - vWorld;
-        float vLen = length(viewDelta);
-        vec3 v = vLen > 1e-5 ? viewDelta / vLen : vec3(0.0, 0.0, 1.0);
-        float ndv = clamp(dot(n, v), 0.0, 1.0);
-        float fresnel = pow(1.0 - ndv, 3.0);
-        vec3 refr = refract(-v, n, 1.0 / 1.48);
-        if (dot(refr, refr) < 0.001) refr = reflect(-v, n);
-        vec3 env = textureCube(uEnv, refr).rgb;
-        float envL = dot(env, vec3(0.3, 0.5, 0.2));
-        vec3 through = mix(vec3(0.46, 0.52, 0.58), vec3(envL), 0.2);
-        float inclusion = smoothstep(0.62, 0.08, length(vObj));
-        through = mix(through, vec3(0.7, 0.78, 0.86), inclusion * 0.5);
-        vec3 reflected = textureCube(uEnv, reflect(-v, n)).rgb;
-        float refL = dot(reflected, vec3(0.3, 0.5, 0.2));
-        vec3 color = mix(through, vec3(refL * 0.65 + 0.18), fresnel * 0.5);
-        color += vec3(0.82, 0.88, 0.94) * pow(fresnel, 2.6) * 0.28;
-        vec3 key = normalize(vec3(0.35, 0.86, 0.32));
-        float spec = pow(max(dot(reflect(-key, n), v), 0.0), 42.0);
-        color += spec * 0.45;
-        gl_FragColor = vec4(color, 1.0);
-      }
-    `,
+/** White rim only. The spectral fringe painted the facets salmon. */
+function crystalEdge(physical: MeshPhysicalMaterial) {
+  physical.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <opaque_fragment>',
+      /* glsl */ `
+        #include <opaque_fragment>
+        {
+          vec3 edgeView = normalize(vViewPosition);
+          float edgeNd = clamp(dot(normalize(normal), edgeView), 0.0, 1.0);
+          float edgeRim = 1.0 - edgeNd;
+          float edgeWhite = pow(smoothstep(0.64, 1.0, edgeRim), 1.25) * 0.6;
+          gl_FragColor.rgb += vec3(edgeWhite);
+        }
+      `,
+    )
+  }
+  physical.customProgramCacheKey = () => 'crystal-edge-25'
+}
+
+function studioRoom(renderer: WebGLRenderer) {
+  const room = new RoomEnvironment()
+  const strips: Array<[number, number, number, number, number, number, number]> = [
+    [7.2, 15.5, 9.4, 0.45, 6.4, 0.35, 4],
+    [-5.4, 19.2, 4.6, 9.5, 0.32, 0.28, 2],
+    [1.4, 7.2, 13.6, 4.2, 0.4, 0.22, 5],
+  ]
+  for (const [x, y, z, sx, sy, sz, intensity] of strips) {
+    const material = new MeshBasicMaterial({ toneMapped: false })
+    material.color.setRGB(intensity, intensity, intensity)
+    const strip = new Mesh(new BoxGeometry(sx, sy, sz), material)
+    strip.position.set(x, y, z)
+    room.add(strip)
+  }
+  const pmrem = new PMREMGenerator(renderer)
+  const texture = pmrem.fromScene(room, 0.28).texture
+  pmrem.dispose()
+  room.traverse((object) => {
+    const mesh = object as Mesh
+    if (!mesh.isMesh) return
+    mesh.geometry.dispose()
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    for (const material of materials) material.dispose()
   })
+  return texture
 }
 
 function boxAnchors(root: Group) {

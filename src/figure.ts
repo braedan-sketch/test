@@ -1,15 +1,14 @@
 import {
-  AdditiveBlending,
   Box3,
   BufferAttribute,
   BufferGeometry,
+  CylinderGeometry,
   Float32BufferAttribute,
   Group,
-  CircleGeometry,
-  DoubleSide,
   Mesh,
-  MeshBasicMaterial,
+  MeshStandardMaterial,
   NormalBlending,
+  PointLight,
   Points,
   ShaderMaterial,
   TorusGeometry,
@@ -85,8 +84,8 @@ export async function createFigure(quality: Quality): Promise<Figure> {
         float bead = pow(clamp(1.0 - r * 2.15, 0.0, 1.0), 1.5);
         float depth = smoothstep(1.4, 7.5, vEye);
         float lit = clamp(vShade * (1.0 - depth * 0.35), 0.0, 1.0);
-        vec3 color = mix(vec3(0.40, 0.46, 0.52), vec3(0.84, 0.88, 0.92), lit);
-        color += vec3(0.16, 0.18, 0.2) * bead * lit;
+        vec3 color = mix(vec3(0.08, 0.09, 0.11), vec3(0.94, 0.96, 0.98), lit);
+        color += vec3(0.22, 0.24, 0.26) * bead * lit;
         gl_FragColor = vec4(color, vAlpha);
       }
     `,
@@ -116,16 +115,18 @@ export async function createFigure(quality: Quality): Promise<Figure> {
       uniform float uPixel;
       varying float vSeed;
       varying float vShade;
+      varying float vRim;
       varying float vAlpha;
       varying float vEye;
       void main() {
         vSeed = aSeed;
         vec3 n = normalize(mat3(modelMatrix) * normal);
-        float ndl = dot(n, normalize(vec3(0.45, 0.72, 0.34)));
-        float under = smoothstep(0.15, -0.65, n.y);
-        float away = smoothstep(0.15, -0.45, dot(normalize(mat3(normalMatrix) * normal), vec3(0.0, 0.0, 1.0)));
-        float lit = smoothstep(-0.15, 0.55, ndl);
-        vShade = clamp(mix(lit, lit * 0.22, max(under, away * 0.85)), 0.0, 1.0);
+        vec3 viewN = normalize(mat3(normalMatrix) * normal);
+        float ndl = dot(n, normalize(vec3(0.62, 0.58, 0.48)));
+        float under = smoothstep(0.2, -0.55, n.y);
+        float lit = smoothstep(-0.45, 0.72, ndl);
+        vShade = clamp(lit * (1.0 - under * 0.62), 0.0, 1.0);
+        vRim = pow(1.0 - clamp(abs(viewN.z), 0.0, 1.0), 2.1);
         float gate = smoothstep(aSeed * 0.45, aSeed * 0.45 + 0.22, uAppear);
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
         vEye = -mv.z;
@@ -137,6 +138,7 @@ export async function createFigure(quality: Quality): Promise<Figure> {
     fragmentShader: /* glsl */ `
       varying float vSeed;
       varying float vShade;
+      varying float vRim;
       varying float vAlpha;
       varying float vEye;
       void main() {
@@ -145,73 +147,51 @@ export async function createFigure(quality: Quality): Promise<Figure> {
         if (r > 0.46) discard;
         float bead = pow(clamp(1.0 - r * 2.1, 0.0, 1.0), 1.7);
         float depth = smoothstep(1.2, 8.0, vEye);
-        float lit = clamp(vShade * (1.0 - depth * 0.28), 0.0, 1.0);
-        vec3 color = mix(vec3(0.22, 0.27, 0.33), vec3(0.90, 0.93, 0.96), lit);
-        color += vec3(0.18, 0.2, 0.22) * bead * lit;
+        float lit = clamp(vShade * (1.0 - depth * 0.22), 0.0, 1.0);
+        vec3 color = mix(vec3(0.07, 0.08, 0.10), vec3(0.96, 0.97, 0.99), lit);
+        color += vec3(0.70, 0.82, 0.94) * vRim * 0.72;
+        color += vec3(0.16, 0.18, 0.2) * bead * lit;
         gl_FragColor = vec4(color, vAlpha);
       }
     `,
   })
   let active = material
 
-  const plate = new Mesh(
-    new CircleGeometry(0.5, 64),
-    new MeshBasicMaterial({
-      color: '#f7fbff',
-      transparent: true,
-      opacity: 0.92,
-      side: DoubleSide,
-      toneMapped: false,
-    }),
+  const plinth = new Group()
+  plinth.name = 'plinth'
+  const drum = new Mesh(
+    new CylinderGeometry(0.34, 0.46, 0.16, 48),
+    new MeshStandardMaterial({ color: '#242b32', roughness: 0.58, metalness: 0.08 }),
   )
-  plate.rotation.x = -Math.PI / 2
-  plate.position.y = 0.012
-  const plateGlow = new Mesh(
-    new CircleGeometry(0.66, 48),
-    new MeshBasicMaterial({
-      color: '#d5e6f4',
-      transparent: true,
-      opacity: 0.22,
-      blending: AdditiveBlending,
-      depthWrite: false,
-      side: DoubleSide,
-      toneMapped: false,
-    }),
+  drum.position.y = -0.05
+  drum.castShadow = true
+  drum.receiveShadow = true
+  const lip = new Mesh(
+    new CylinderGeometry(0.5, 0.42, 0.045, 56),
+    new MeshStandardMaterial({ color: '#3c4854', roughness: 0.36, metalness: 0.14 }),
   )
-  plateGlow.rotation.x = -Math.PI / 2
-  plateGlow.position.y = 0.006
-  const disc = new Mesh(
-    new TorusGeometry(0.64, 0.05, 16, 96),
-    new MeshBasicMaterial({ color: '#f4fbff', toneMapped: false }),
-  )
-  disc.rotation.x = Math.PI / 2
-  disc.position.y = 0.02
-  const inner = new Mesh(
-    new TorusGeometry(0.42, 0.012, 10, 80),
-    new MeshBasicMaterial({
-      color: '#ffffff',
-      transparent: true,
-      opacity: 0.85,
-      blending: AdditiveBlending,
-      toneMapped: false,
-    }),
-  )
-  inner.rotation.x = Math.PI / 2
-  inner.position.y = 0.02
-  const glow = new Mesh(
-    new TorusGeometry(0.64, 0.07, 12, 80),
-    new MeshBasicMaterial({
-      color: '#d5e6f0',
-      transparent: true,
-      opacity: 0.28,
-      blending: AdditiveBlending,
-      depthWrite: false,
-      toneMapped: false,
-    }),
-  )
-  glow.rotation.x = Math.PI / 2
-  glow.position.y = 0.01
-  root.add(plateGlow, plate, disc, inner, glow)
+  lip.position.y = 0.03
+  plinth.add(drum, lip)
+  for (let i = 0; i < 5; i += 1) {
+    const ring = new Mesh(
+      new TorusGeometry(0.58 + i * 0.13, 0.007 + (i % 2) * 0.005, 8, 96),
+      new MeshStandardMaterial({
+        color: i % 2 === 0 ? '#d5e4f0' : '#667684',
+        roughness: 0.28,
+        metalness: 0.18,
+        emissive: '#b7cfe2',
+        emissiveIntensity: 0.28 - i * 0.04,
+      }),
+    )
+    ring.rotation.x = Math.PI / 2
+    ring.position.y = 0.055 + i * 0.006
+    plinth.add(ring)
+  }
+  const key = new PointLight('#fff2e6', 28, 9, 2)
+  key.position.set(1.4, 2.5, 1.7)
+  const rim = new PointLight('#8eb6d2', 18, 8, 2)
+  rim.position.set(-1.55, 1.7, -1.15)
+  root.add(plinth, key, rim)
 
   const turn = new Group()
   root.add(turn)
@@ -244,11 +224,7 @@ export async function createFigure(quality: Quality): Promise<Figure> {
       active.uniforms.uTime!.value = time
       active.uniforms.uPixel!.value = pixelRatio
       const shown = appear * (1 - Math.min(1, blow * 1.4))
-      plate.visible = shown > 0.05
-      plateGlow.visible = shown > 0.05
-      disc.visible = shown > 0.05
-      inner.visible = shown > 0.05
-      glow.visible = shown > 0.05
+      plinth.visible = shown > 0.05
     },
   }
 }

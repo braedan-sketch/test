@@ -62,6 +62,7 @@ export function createGlassMaterial(options: {
   normalMap: Texture | null
   roughnessMap: Texture | null
   kind: GlassKind
+  outer?: boolean
 }) {
   const crystal = options.kind === 'crystal'
   const normalMap = options.normalMap
@@ -93,6 +94,7 @@ export function createGlassMaterial(options: {
         uAbsorb: { value: new Color('#1a2836') },
         uCore: { value: new Color('#d7e6f2') },
         uIor: { value: 1.4 },
+        uOuter: { value: options.outer ? 1 : 0 },
       },
       vertexShader: ringsVertex,
       fragmentShader: ringsFragment,
@@ -140,6 +142,7 @@ const ringsFragment = /* glsl */ `
       uniform vec3 uAbsorb;
       uniform vec3 uCore;
       uniform float uIor;
+      uniform float uOuter;
       varying vec3 vWorld;
       varying vec3 vNormal;
       varying vec2 vUv;
@@ -192,16 +195,6 @@ const ringsFragment = /* glsl */ `
         float fresnel = pow(1.0 - ndv, 2.4);
         vec3 reflectDir = reflect(-v, n);
 
-        float eta = 1.0 / uIor;
-        vec3 refrR = refract(-v, n, eta * 1.04);
-        vec3 refrG = refract(-v, n, eta);
-        vec3 refrB = refract(-v, n, eta * 0.94);
-        if (dot(refrR, refrR) < 0.001) refrR = reflectDir;
-        if (dot(refrG, refrG) < 0.001) refrG = reflectDir;
-        if (dot(refrB, refrB) < 0.001) refrB = reflectDir;
-        vec3 refracted = vec3(envSample(refrR).r, envSample(refrG).g, envSample(refrB).b);
-        vec3 reflected = envSample(reflectDir);
-
         float rough = 0.22;
         if (uHasRough > 0.5) rough = texture2D(uRoughnessMap, vUv).g;
 
@@ -210,18 +203,43 @@ const ringsFragment = /* glsl */ `
         float gloss = mix(28.0, 140.0, 1.0 - rough);
         float spec = pow(max(dot(reflect(-key, n), v), 0.0), gloss);
         float spec2 = pow(max(dot(reflect(-rimLight, n), v), 0.0), 48.0);
+        vec3 reflected = envSample(reflectDir);
+
+        if (uOuter > 0.5) {
+          float eta = 1.0 / uIor;
+          vec3 refrR = refract(-v, n, eta * 1.04);
+          vec3 refrG = refract(-v, n, eta);
+          vec3 refrB = refract(-v, n, eta * 0.94);
+          if (dot(refrR, refrR) < 0.001) refrR = reflectDir;
+          if (dot(refrG, refrG) < 0.001) refrG = reflectDir;
+          if (dot(refrB, refrB) < 0.001) refrB = reflectDir;
+          vec3 refracted = vec3(envSample(refrR).r, envSample(refrG).g, envSample(refrB).b);
+          vec3 body = mix(vec3(0.04, 0.06, 0.08), vec3(0.28, 0.36, 0.44), ndv);
+          vec3 glass = mix(body, refracted * 0.9, 0.62);
+          glass = mix(glass, reflected, fresnel * 0.82);
+          glass += vec3(1.0) * pow(fresnel, 1.8) * 0.9;
+          glass += spec * vec3(1.35);
+          glass += spec2 * vec3(0.7, 0.84, 1.0) * 0.55;
+          gl_FragColor = vec4(clamp(glass, 0.0, 3.0), 1.0);
+          return;
+        }
 
         float wear = fract(sin(dot(vWorld.xyz, vec3(19.7, 43.1, 7.3))) * 12543.2);
         float chip = smoothstep(0.82, 0.97, wear);
-        vec3 stone = mix(vec3(0.38, 0.42, 0.46), vec3(0.62, 0.66, 0.70), ndv);
-        stone *= mix(0.84, 1.0, wear);
-        stone = mix(stone, stone * 0.62, chip * 0.65);
+        float ndl = clamp(dot(n, key), 0.0, 1.0);
+        vec3 stone = mix(vec3(0.10, 0.12, 0.14), vec3(0.46, 0.52, 0.58), ndl);
+        stone *= mix(0.72, 1.0, wear);
+        stone = mix(stone, stone * 0.45, chip);
         vec3 color = stone;
-        color = mix(color, reflected * 0.28, fresnel * 0.22);
-        color += spec * vec3(0.85, 0.9, 0.96) * 0.28;
-        color += spec2 * vec3(0.55, 0.64, 0.72) * 0.12;
-        color += vec3(0.7, 0.82, 0.92) * pow(fresnel, 3.2) * 0.18;
-        gl_FragColor = vec4(clamp(color, 0.0, 2.0), 1.0);
+        color = mix(color, reflected * 0.55, fresnel * 0.45);
+        color += spec * vec3(1.05, 1.08, 1.12) * 0.9;
+        color += spec2 * vec3(0.62, 0.74, 0.86) * 0.4;
+        color += vec3(0.86, 0.93, 1.0) * pow(fresnel, 2.4) * 0.7;
+        float latU = abs(fract(vUv.x * 22.0) - 0.5);
+        float latV = abs(fract(vUv.y * 7.0) - 0.5);
+        float lattice = 1.0 - smoothstep(0.012, 0.07, min(latU, latV));
+        color += vec3(0.72, 0.88, 1.0) * lattice * (0.35 + fresnel);
+        gl_FragColor = vec4(clamp(color, 0.0, 2.4), 1.0);
       }
 `
 

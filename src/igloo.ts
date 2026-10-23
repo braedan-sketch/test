@@ -234,7 +234,7 @@ function prepareBakedMaterial(root: Object3D, uniforms: BlockUniforms) {
   material.toneMapped = true
   if (material.map) material.map.colorSpace = SRGBColorSpace
   material.fog = true
-  material.customProgramCacheKey = () => 'blendy-baked-igloo-v7'
+  material.customProgramCacheKey = () => 'blendy-baked-igloo-v9'
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uSolid = uniforms.uSolid
     shader.uniforms.uDissolve = uniforms.uDissolve
@@ -280,22 +280,22 @@ function prepareBakedMaterial(root: Object3D, uniforms: BlockUniforms) {
           base = texture2D(uAlbedo, vMapUv).rgb;
         } else {
           float luma = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
-          vec3 snowLo = vec3(0.62, 0.68, 0.73);
-          vec3 snowHi = vec3(0.88, 0.91, 0.94);
-          vec3 snow = mix(snowLo, snowHi, smoothstep(0.04, 0.5, luma));
-          // The baked seams are hot white strips. Pull them back into the snow.
-          snow = mix(snow, snowHi * 0.8, smoothstep(0.72, 0.96, luma));
+          vec3 snowLo = vec3(0.18, 0.21, 0.24);
+          vec3 snowHi = vec3(0.46, 0.51, 0.56);
+          vec3 snow = mix(snowLo, snowHi, smoothstep(0.06, 0.55, luma));
+          snow = mix(snow, snowHi * 0.72, smoothstep(0.7, 0.95, luma));
           float grit = fract(sin(dot(vWorld.xyz, vec3(19.7, 43.1, 7.3))) * 12543.2);
-          float pit = fract(sin(dot(floor(vWorld * 14.0), vec3(12.9, 78.2, 45.1))) * 43758.5);
-          base = snow * (0.9 + grit * 0.08 + pit * 0.06);
+          base = snow * (0.86 + grit * 0.18);
         }
         vec3 n = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
         vec3 viewDir = normalize(cameraPosition - vWorld);
         float ndv = clamp(abs(dot(n, viewDir)), 0.0, 1.0);
-        float rim = pow(1.0 - ndv, 2.2);
-        float wrap = pow(ndv, 0.45);
-        diffuseColor.rgb = base * (0.78 + wrap * 0.28);
-        diffuseColor.rgb += vec3(0.72, 0.86, 1.0) * rim * 0.42;`,
+        float rim = pow(1.0 - ndv, 2.8);
+        float gap = smoothstep(0.08, 0.55, length(fwidth(n)));
+        float wrap = pow(ndv, 0.65);
+        diffuseColor.rgb = base * (0.45 + wrap * 0.7);
+        diffuseColor.rgb *= mix(1.0, 0.28, gap);
+        diffuseColor.rgb += vec3(1.15, 1.22, 1.3) * rim * 2.4;`,
       )
   }
   return material
@@ -408,8 +408,8 @@ export async function loadIgloo(
     const lead = piece.row >= 4 || piece.tunnel
     const rowSpan = lead ? 0.22 : 0.1 + piece.row * 0.028
     const jitter = hash01(hashString(piece.mesh.name || 'piece') * 1.7) * 0.04
-    piece.outDist = radius * Math.min(0.3, Math.max(0.1, rowSpan + jitter))
-    piece.lift = radius * (0.004 + Math.min(piece.row, 4) * 0.003)
+    piece.outDist = radius * Math.min(0.72, Math.max(0.28, rowSpan * 2.4 + jitter))
+    piece.lift = radius * (0.02 + Math.min(piece.row, 4) * 0.014)
     const rowLag = lead ? hash01(hashString(piece.mesh.name) * 3.3) * 0.05 : 0.05 + (4 - Math.min(piece.row, 4)) * 0.035
     piece.delay = Math.min(0.22, rowLag)
   }

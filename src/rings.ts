@@ -9,6 +9,7 @@ import {
   ShaderMaterial,
   Object3D,
   PointLight,
+  Quaternion,
   SphereGeometry,
   Sprite,
   SpriteMaterial,
@@ -71,13 +72,12 @@ export async function createRings(quality: Quality): Promise<Rings> {
     bands.push({ group: spinner, speed: spec.speed })
   }
 
-  const core = new Mesh(
-    new SphereGeometry(0.28, 24, 16),
-    new MeshBasicMaterial({
-      color: '#ffffff',
-      toneMapped: false,
-    }),
-  )
+  const coreMaterial = new MeshBasicMaterial({
+    color: '#ffffff',
+    toneMapped: false,
+  })
+  coreMaterial.color.setRGB(3.2, 3.4, 3.6)
+  const core = new Mesh(new SphereGeometry(0.28, 24, 16), coreMaterial)
   root.add(core)
 
   const light = new PointLight('#ffffff', 6, 10, 1.2)
@@ -108,7 +108,7 @@ export async function createRings(quality: Quality): Promise<Rings> {
           toneMapped: false,
         }),
       )
-      halo.scale.setScalar(1.15)
+      halo.scale.setScalar(2.6)
       halo.position.y = 0.2
       root.add(halo)
     }
@@ -118,7 +118,8 @@ export async function createRings(quality: Quality): Promise<Rings> {
   const rigs: RingRig[] = []
   if (hero) {
     for (const band of bands) band.group.visible = false
-    core.visible = false
+    core.position.y = 0.2
+    core.scale.setScalar(1.45)
     const ringMeshes: Mesh[] = []
     hero.traverse((object) => {
       const mesh = object as Mesh
@@ -129,28 +130,25 @@ export async function createRings(quality: Quality): Promise<Rings> {
       const maps = source as { normalMap?: Texture | null; roughnessMap?: Texture | null }
       const normalMap = maps.normalMap ?? null
       const roughnessMap = maps.roughnessMap ?? null
+      const parentName = mesh.parent?.name ?? ''
+      const outer = mesh.name.includes('outer') || parentName.includes('outer')
       mesh.material = createGlassMaterial({
         normalMap: normalMap ?? null,
         roughnessMap: roughnessMap ?? null,
         kind: 'rings',
+        outer,
       })
     }
     fitHero(hero, 4.6)
     hero.position.y = 0.2
     root.add(hero)
-    const field = new Mesh(new CircleGeometry(6.4, 72), ringFieldMaterial())
+    const field = new Mesh(new CircleGeometry(2.45, 72), ringFieldMaterial())
     field.name = 'ring-field'
     field.rotation.x = -Math.PI / 2
-    field.position.y = -0.45
+    field.position.y = -0.35
     field.frustumCulled = false
     field.renderOrder = -1
     root.add(field)
-    const heart = new Mesh(
-      new SphereGeometry(0.16, 24, 16),
-      new MeshBasicMaterial({ color: '#ffffff', toneMapped: false }),
-    )
-    heart.position.y = 0.2
-    root.add(heart)
     const specs = [
       { name: 'ring_outer', speed: 0.18 },
       { name: 'ring_mid', speed: -0.34 },
@@ -170,6 +168,7 @@ export async function createRings(quality: Quality): Promise<Rings> {
         }),
       })
     }
+    balanceArcs(rigs)
   }
 
   return {
@@ -189,8 +188,8 @@ export async function createRings(quality: Quality): Promise<Rings> {
       for (const band of bands) {
         band.group.rotation.y = spin * Math.PI * 2 * band.speed
       }
-      light.intensity = 2.2 + shown * 3.2
-      if (halo) halo.material.opacity = 0.22 + shown * 0.28
+      light.intensity = 8 + shown * 14
+      if (halo) halo.material.opacity = 0.55 + shown * 0.4
     },
   }
 }
@@ -212,15 +211,43 @@ function ringFieldMaterial() {
     fragmentShader: /* glsl */ `
       varying vec2 vP;
       void main() {
-        vec2 g = abs(fract(vP * 1.35) - 0.5);
-        float line = 1.0 - smoothstep(0.02, 0.055, min(g.x, g.y));
-        float fade = 1.0 - smoothstep(3.2, 6.1, length(vP));
+        float r = length(vP);
+        float spokes = abs(sin(atan(vP.y, vP.x) * 10.0));
+        float rings = abs(sin(r * 16.0));
+        float line = 1.0 - smoothstep(0.02, 0.16, min(spokes, rings));
+        float fade = 1.0 - smoothstep(1.35, 2.4, r);
         float glow = line * fade;
-        if (glow < 0.25) discard;
-        gl_FragColor = vec4(vec3(0.62, 0.8, 0.95), glow * 0.55);
+        if (glow < 0.2) discard;
+        gl_FragColor = vec4(vec3(0.72, 0.86, 1.0), glow * 0.42);
       }
     `,
   })
+}
+
+function balanceArcs(rigs: RingRig[]) {
+  const axis = new Vector3(0, 1, 0)
+  const turn = new Quaternion()
+  for (const rig of rigs) {
+    if (rig.segments.length < 2) continue
+    const ordered = [...rig.segments].sort(
+      (a, b) => Math.atan2(a.base.z, a.base.x) - Math.atan2(b.base.z, b.base.x),
+    )
+    let radius = 0
+    for (const segment of ordered) radius += Math.hypot(segment.base.x, segment.base.z)
+    radius /= ordered.length
+    const count = ordered.length
+    for (let i = 0; i < count; i += 1) {
+      const segment = ordered[i]
+      if (!segment) continue
+      const current = Math.atan2(segment.base.z, segment.base.x)
+      const target = (i / count) * Math.PI * 2 - Math.PI / 2
+      turn.setFromAxisAngle(axis, target - current)
+      segment.object.quaternion.premultiply(turn)
+      segment.base.set(Math.cos(target) * radius, segment.base.y, Math.sin(target) * radius)
+      segment.dir.set(Math.cos(target), 0, Math.sin(target))
+      segment.object.position.copy(segment.base)
+    }
+  }
 }
 
 type RingRig = {

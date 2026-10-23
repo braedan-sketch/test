@@ -56,14 +56,15 @@ declare global {
       scrollTo: (y: number) => void
       scrollProgress: (progress: number) => void
       debug?: () => Record<string, unknown>
+      frame?: { ms: number; p50: number; p95: number; fps: number; n: number }
     }
     __blendyScrollTo?: (fraction: number) => void
   }
 }
 
 // Dome center. Direction is about 6° down so the camera sits low and close.
-const EYE_TARGET: readonly [number, number, number] = [0.02, 3.05, 0.04]
-const EYE_DIR: readonly [number, number, number] = [0.42, 0.17, 1.5]
+const EYE_TARGET: readonly [number, number, number] = [0.02, 1.55, 0.04]
+const EYE_DIR: readonly [number, number, number] = [0.28, 0.72, 1.35]
 const CRYSTAL_DIR: readonly [number, number, number] = [0.22, 0.04, 1]
 // Upright bust, base on the ring at y 0, ears near y 2. Look slightly up at the chest.
 const FOX_TARGET: readonly [number, number, number] = [0.0, 1.02, 0.0]
@@ -93,7 +94,7 @@ export async function startExperience(overlay: Overlay) {
 
   renderer.outputColorSpace = SRGBColorSpace
   renderer.toneMapping = NoToneMapping
-  renderer.toneMappingExposure = 0.9
+  renderer.toneMappingExposure = 1.02
   renderer.transmissionResolutionScale = quality.low ? 0.35 : 1.75
   renderer.setClearColor('#c5c8cc', 1)
   if (quality.shadows) {
@@ -125,37 +126,37 @@ export async function startExperience(overlay: Overlay) {
     radius: 0.45,
   })
   const chromatic = new ChromaticAberrationEffect({
-    offset: new Vector2(0.0011, 0.0006),
+    offset: new Vector2(0.0055, 0.0032),
     radialModulation: true,
-    modulationOffset: 0.48,
+    modulationOffset: 0.28,
   })
   const softGpu = softwareGpu(renderer)
   const dof = new DepthOfFieldEffect(camera, {
     focusDistance: 8,
-    focusRange: 2.6,
-    bokehScale: quality.low ? 0.5 : softGpu ? 0.85 : 2,
-    resolutionScale: quality.low || softGpu ? 0.2 : 0.5,
+    focusRange: 0.85,
+    bokehScale: quality.low ? 1.4 : softGpu ? 2.6 : 6.5,
+    resolutionScale: quality.low || softGpu ? 0.25 : 0.5,
   })
   const warp = new WarpEffect()
   const noise = new NoiseEffect({
     blendFunction: BlendFunction.OVERLAY,
     premultiply: true,
   })
-  noise.blendMode.setOpacity(0.07)
+  noise.blendMode.setOpacity(0.34)
   const vignette = new VignetteEffect({ darkness: 0.32, offset: 0.38 })
   const frost = new FrostEffect()
   const smaa = quality.smaa ? new SMAAEffect({ preset: SMAAPreset.HIGH }) : null
   const normalPass = quality.low || softGpu ? null : new NormalPass(scene, camera, { resolutionScale: 0.75 })
   const ssao = normalPass
     ? new SSAOEffect(camera, normalPass.texture, {
-        samples: 16,
-        rings: 7,
+        samples: 10,
+        rings: 5,
         radius: 0.055,
         intensity: 0.85,
         bias: 0.05,
         fade: 0.012,
         luminanceInfluence: 0.35,
-        resolutionScale: 0.75,
+        resolutionScale: 0.5,
       })
     : null
   composer.addPass(new RenderPass(scene, camera))
@@ -213,6 +214,8 @@ export async function startExperience(overlay: Overlay) {
     const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight)
     lenis.scrollTo(max * clamp(fraction, 0, 1), { immediate: true, force: true })
   }
+  const frameStats = { ms: 0, p50: 0, p95: 0, fps: 0, n: 0 }
+  const frameTimes: number[] = []
   window.__blendy = {
     scrollTo(y) {
       lenis.scrollTo(y, { immediate: true, force: true })
@@ -221,6 +224,7 @@ export async function startExperience(overlay: Overlay) {
       shotLocks = 0
       scrollToFraction(progress)
     },
+    frame: frameStats,
   }
   window.__blendyScrollTo = (fraction) => {
     shotLocks = 0
@@ -232,7 +236,7 @@ export async function startExperience(overlay: Overlay) {
 
   let figureGroup: Object3D | null = null
   const [meteor, rings, figure] = await Promise.all([
-    createMeteor(quality),
+    createMeteor(quality, renderer),
     createRings(quality),
     createFigure(quality),
   ])
@@ -318,7 +322,8 @@ export async function startExperience(overlay: Overlay) {
 
   let last = performance.now()
   const frame = (now: number) => {
-    const dt = Math.min(0.05, (now - last) / 1000)
+    const rawDt = Math.max(0, (now - last) / 1000)
+    const dt = Math.min(0.05, rawDt)
     last = now
     lenis.raf(now)
     if (shotLocks > 0 && shot != null) {
@@ -342,7 +347,7 @@ export async function startExperience(overlay: Overlay) {
       const phase = readPhase(global, marks)
 
       const wire = phase.screen === 'field' ? 1 - smoother(phase.solid) : 0
-      world.update(now / 1000, phase.mood, wire)
+      world.update(now / 1000, phase.mood, wire, phase.screen === 'field' || phase.screen === 'rift')
       clear.copy(world.fog.color)
       renderer.setClearColor(clear, 1)
       scene.environmentIntensity =
@@ -369,8 +374,7 @@ export async function startExperience(overlay: Overlay) {
         overlay.setActive(screen)
       }
       // The rings frames stay chrome-free. The arrival (stop 08) does not.
-      if (phase.screen === 'rings') document.body.dataset.quiet = 'rings'
-      else delete document.body.dataset.quiet
+      delete document.body.dataset.quiet
       fadeMeteorCopy(phase)
       if (!cornerPulsed && phase.burst > 0.04 && phase.screen === 'field') {
         cornerPulsed = true
@@ -399,11 +403,27 @@ export async function startExperience(overlay: Overlay) {
       )
 
       composer.render(dt)
+      noteFrame(rawDt)
       adaptFrame(dt)
     }
     requestAnimationFrame(frame)
   }
   requestAnimationFrame(frame)
+
+  function noteFrame(dt: number) {
+    const ms = dt * 1000
+    frameTimes.push(ms)
+    if (frameTimes.length > 24) frameTimes.shift()
+    let sum = 0
+    for (const sample of frameTimes) sum += sample
+    const sorted = [...frameTimes].sort((a, b) => a - b)
+    const last = sorted.length - 1
+    frameStats.ms = ms
+    frameStats.n = frameTimes.length
+    frameStats.p50 = sorted[Math.floor(sorted.length * 0.5)] ?? ms
+    frameStats.p95 = sorted[Math.min(last, Math.floor(sorted.length * 0.95))] ?? ms
+    frameStats.fps = sum > 0 ? (frameTimes.length * 1000) / sum : 0
+  }
 
   function adaptFrame(dt: number) {
     if (!revealed || adapted) return
@@ -475,27 +495,15 @@ function readPhase(global: number, marks: Marks): Phase {
   const burst = inField ? clamp((fieldT - 0.58) / 0.42, 0, 1) : 1
   const dissolve = inField ? 0 : inRift ? smoother(clamp((riftT - 0.22) / 0.56, 0, 1)) : 1
   // Subjects overlap at the edges so a scroll stop never lands on an empty frame.
-  const meteorReveal = inField
-    ? 0
-    : inRift
-      ? smoother(clamp((riftT - 0.25) / 0.4, 0, 1))
-      : inMeteor
-        ? 1 - smoother(clamp((meteorT - 0.9) / 0.1, 0, 1))
-        : 0
-  // The last fifth of the rings scroll swings the camera onto the fox.
-  // Rings fade as that swing finishes, so the frame always has a subject.
-  const handoff = inRings ? smoother(clamp((ringsT - 0.78) / 0.22, 0, 1)) : inFigure ? 1 : 0
-  const ringsShown = inMeteor
-    ? smoother(clamp((meteorT - 0.84) / 0.16, 0, 1))
-    : inRings
-      ? 1 - smoother(clamp((handoff - 0.45) / 0.55, 0, 1))
-      : 0
-  const figureAppear = inRings ? smoother(clamp(handoff / 0.55, 0, 1)) : inFigure ? 1 : 0
+  const meteorReveal = inMeteor ? 1 : inRift ? smoother(clamp((riftT - 0.62) / 0.38, 0, 1)) : 0
+  const handoff = 0
+  const ringsShown = inRings ? 1 : 0
+  const figureAppear = inFigure ? 1 : 0
   const wipe = inFigure
     ? smoother(clamp((figureT - 0.7) / 0.045, 0, 1)) * (1 - smoother(clamp((figureT - 0.8) / 0.045, 0, 1)))
     : 0
   // The stream is part of the fox hold. The glitch is a separate short tear.
-  const figureBlow = inFigure ? smoother(clamp((figureT - 0.16) / 0.22, 0, 1)) * 0.42 : 0
+  const figureBlow = 0
 
   const ripple = 0
   const white = 0
@@ -598,7 +606,6 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
   } else if (phase.screen === 'rings') {
     fov = 36
     placeRings(phase.ringsT, aspect, pos, target, up)
-    if (phase.handoff > 0) blendTowardFox(phase, aspect, pos, target, up, phase.handoff)
   } else {
     fov = 34
     placeFox(phase, aspect, pos, target, up)
@@ -622,22 +629,10 @@ function placeRings(ringsT: number, aspect: number, pos: Vector3, target: Vector
   // The last part of the old dive looked straight down into the glass and
   // came back fully black on Metal. Hold the height once the rings fill the frame.
   const y = Math.max(framed * 0.9, lerp(far, near, smoother(ringsT)))
-  const roll = Math.min(1, ringsT) * 0.55
+  const roll = Math.min(1, ringsT) * 0.08
   pos.set(0, y, 0)
   target.set(0, 0.15, 0)
   up.set(Math.sin(roll), 0, Math.cos(roll))
-}
-
-function blendTowardFox(phase: Phase, aspect: number, pos: Vector3, target: Vector3, up: Vector3, amount: number) {
-  poseA.copy(pos)
-  poseB.copy(target)
-  const saved = poseD.copy(up)
-  placeFox(phase, aspect, poseC, target, up)
-  pos.lerpVectors(poseA, poseC, amount)
-  target.lerpVectors(poseB, target, amount)
-  up.lerpVectors(saved, up, amount)
-  if (up.lengthSq() < 1e-6) up.set(0, 1, 0)
-  else up.normalize()
 }
 
 function placeFox(phase: Phase, aspect: number, pos: Vector3, target: Vector3, up: Vector3) {
@@ -652,7 +647,7 @@ function placeFox(phase: Phase, aspect: number, pos: Vector3, target: Vector3, u
     FOX_DIR[0] * Math.sin(yaw) + FOX_DIR[2] * Math.cos(yaw),
   ]
   target.set(FOX_TARGET[0], FOX_TARGET[1], FOX_TARGET[2])
-  placeAlong(pos, FOX_TARGET, dir, dist + phase.figureBlow * 0.35)
+  placeAlong(pos, FOX_TARGET, dir, dist)
   up.set(0, 1, 0)
 }
 
@@ -837,12 +832,12 @@ function applyGrade(
   const burst = phase.screen === 'field' ? phase.burst : 0
   // One filmed grade for every scene. Bloom stays on the rims, not the snow.
   if (tone.blendMode.blendFunction !== BlendFunction.SRC) tone.blendMode.blendFunction = BlendFunction.SRC
-  bloom.intensity = 0.16 + burst * 0.06
-  bloom.luminanceMaterial.threshold = 0.86
-  vignette.darkness = 0.32
-  vignette.offset = 0.38
-  const fringe = 0.0011 + (phase.chroma > 0.02 ? phase.chroma * 0.003 : 0)
-  chromatic.offset.set(fringe, fringe * 0.55)
+  bloom.intensity = 0.42 + burst * 0.12
+  bloom.luminanceMaterial.threshold = 0.68
+  vignette.darkness = 0.68
+  vignette.offset = 0.18
+  const fringe = 0.0055 + (phase.chroma > 0.02 ? phase.chroma * 0.004 : 0)
+  chromatic.offset.set(fringe, fringe * 0.58)
   warp.setWarp(phase.ripple, phase.blur, phase.glitch, phase.white, phase.riftT + phase.figureT, aspect)
 }
 

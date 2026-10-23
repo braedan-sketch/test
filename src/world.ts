@@ -2,6 +2,7 @@ import {
   AdditiveBlending,
   BufferGeometry,
   Color,
+  CanvasTexture,
   DataTexture,
   FogExp2,
   Float32BufferAttribute,
@@ -17,6 +18,7 @@ import {
   RGBAFormat,
   RepeatWrapping,
   ShaderMaterial,
+  SRGBColorSpace,
   SphereGeometry,
   BackSide,
   UnsignedByteType,
@@ -25,9 +27,10 @@ import {
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
+import { fitHero, loadHero } from './heroModel'
 import type { Quality } from './quality'
 
-const HAZE = new Color('#8ea0ac')
+const HAZE = new Color('#1a222a')
 
 // Camera looks from +Z, so the snow in front of the entrance is positive Z.
 const CRATERS: Array<[number, number, number, number]> = [
@@ -113,16 +116,16 @@ export function sampleHeight(x: number, z: number) {
   // Screen-right is +X from this camera, so the snow rises that way.
   height += x * 0.06 + Math.max(0, -z) * 0.015
   const pad = Math.exp(-radius * radius * 0.2)
-  return height * (1 - pad * 0.97)
+  return height * 1.65 * (1 - pad * 0.97)
 }
 
 export type World = {
   fog: FogExp2
-  update: (time: number, mood: number, wire?: number) => void
+  update: (time: number, mood: number, wire?: number, field?: boolean) => void
 }
 
 export function createWorld(scene: Scene, quality: Quality): World {
-  const fog = new FogExp2(HAZE.clone(), 0.012)
+  const fog = new FogExp2(HAZE.clone(), 0.0032)
   scene.fog = fog
   scene.add(buildSky())
 
@@ -143,24 +146,26 @@ export function createWorld(scene: Scene, quality: Quality): World {
     roughness: 1,
     metalness: 0,
   })
-  terrainMat.customProgramCacheKey = () => 'blendy-snow-v7'
+  terrainMat.customProgramCacheKey = () => 'blendy-snow-v9'
   let terrainMood: { value: number } | null = null
   terrainMat.onBeforeCompile = (shader) => {
     shader.uniforms.uDetail = { value: detail }
     shader.uniforms.uMood = { value: 0 }
     terrainMood = shader.uniforms.uMood as { value: number }
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vRock;')
+      .replace('#include <common>', '#include <common>\nvarying vec3 vRock;\nvarying vec3 vWorldN;')
       .replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
-        vRock = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
+        vRock = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        vWorldN = normalize(mat3(modelMatrix) * objectNormal);`,
       )
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
         `#include <common>
         varying vec3 vRock;
+        varying vec3 vWorldN;
         uniform sampler2D uDetail;
         uniform float uMood;`,
       )
@@ -196,17 +201,16 @@ export function createWorld(scene: Scene, quality: Quality): World {
         float pebbleFade = 1.0 - smoothstep(0.12, 0.85, fw * 8.0);
         float macro = sin(xz.x * 0.085 + 0.7) * sin(xz.y * 0.063 - 0.4);
         float broad = sin(xz.x * 0.027 + xz.y * 0.021 + 1.4);
-        vec3 rockCol = vec3(0.28, 0.32, 0.36);
-        vec3 snowCol = vec3(0.72, 0.76, 0.80);
+        vec3 rockCol = vec3(0.07, 0.08, 0.09);
+        vec3 snowCol = vec3(0.78, 0.82, 0.86);
         float cover = macro * 0.55 + broad * 0.35 + (grit - 0.5) * 1.35 + grain * fade * 0.7 + pebble * pebbleFade * 0.45;
-        float drift = smoothstep(-0.2, 0.4, cover);
+        float slope = 1.0 - clamp(vWorldN.y, 0.0, 1.0);
+        float drift = smoothstep(0.15, 0.72, cover) * (1.0 - smoothstep(0.28, 0.72, slope));
         diffuseColor.rgb = mix(rockCol, snowCol, drift);
-        diffuseColor.rgb *= 0.86 + grit * 0.22 + abs(grain) * fade * 0.18;`,
-      )
-      .replace(
-        '#include <opaque_fragment>',
-        `#include <opaque_fragment>
-        gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.62, 0.68, 0.74), 0.08);`,
+        diffuseColor.rgb *= 0.55 + grit * 0.28 + abs(grain) * fade * 0.16;
+        float sun = clamp(dot(normalize(vWorldN), normalize(vec3(0.32, 0.88, 0.28))), 0.0, 1.0);
+        diffuseColor.rgb *= mix(0.18, 1.05, sun);
+        diffuseColor.rgb += vec3(0.95) * pow(sun, 28.0) * drift * 0.55;`,
       )
   }
   const terrain = new Mesh(geometry, terrainMat)
@@ -219,26 +223,30 @@ export function createWorld(scene: Scene, quality: Quality): World {
 
   const snow = buildSnow(quality.snow)
   scene.add(snow.points)
+  const ranges = buildRidges(quality.low)
+  scene.add(ranges)
+  mountRanges(ranges)
 
   const sky = scene.children.find((child) => child.name === 'sky')
   const skyMat = sky instanceof Mesh ? (sky.material as ShaderMaterial) : null
 
   return {
     fog,
-    update(time, mood, wire = 0) {
+    update(time, mood, wire = 0, field = true) {
       const color = fogColor(mood)
       fog.color.copy(color)
-      fog.density = wire > 0.5 ? 0.001 : fogDensity(mood)
-      if (wire > 0.5) fog.color.set('#b7c3cc')
+      fog.density = wire > 0.5 ? 0.0004 : fogDensity(mood)
+      if (wire > 0.5) fog.color.set('#9aa6b0')
       if (skyMat) {
         skyMat.uniforms.uMood!.value = mood
         skyMat.uniforms.uWire!.value = wire
       }
       if (terrainMood) terrainMood.value = mood
-      terrain.visible = wire < 0.45
-      groundWire.root.visible = wire > 0.15
+      // The ground plane is the field. In the crystal and fox shots it folds into a white ribbon.
+      terrain.visible = field && wire < 0.45
+      groundWire.root.visible = field && wire > 0.15
       groundWire.setOpacity(Math.min(1, Math.max(0, (wire - 0.15) / 0.5)))
-      snow.points.visible = wire < 0.4
+      snow.points.visible = field && wire < 0.4
       const attr = snow.points.geometry.getAttribute('position')
       if (attr && snow.points.visible) {
         for (let i = 0; i < snow.count; i += 1) {
@@ -356,20 +364,20 @@ function buildSky() {
         float ang = atan(d.z, d.x);
         float ridge = sin(ang * 1.7 + 0.4) * 0.55 + sin(ang * 3.4 + 1.1) * 0.32 + sin(ang * 6.8 + 0.2) * 0.16;
         float ridgeFar = sin(ang * 2.4 + 2.1) * 0.42 + sin(ang * 5.2 + 0.5) * 0.22;
-        vec3 haze = vec3(0.56, 0.63, 0.69);
-        vec3 zenith = vec3(0.30, 0.36, 0.44);
-        vec3 color = mix(haze, zenith, smoothstep(-0.02, 0.62, h));
+        vec3 haze = vec3(0.09, 0.11, 0.15);
+        vec3 zenith = vec3(0.012, 0.016, 0.03);
+        vec3 color = mix(haze, zenith, smoothstep(-0.22, 0.32, h));
         float crest = 0.07 + ridge * 0.2;
         float peaks = smoothstep(crest + 0.045, crest - 0.04, h);
         float crestFar = 0.0 + ridgeFar * 0.14;
         float farPeaks = smoothstep(crestFar + 0.04, crestFar - 0.05, h) * (1.0 - peaks);
         float shade = 0.42 + 0.58 * sin(ang * 3.1 + 0.8);
-        vec3 farMtn = mix(vec3(0.48, 0.55, 0.62), vec3(0.36, 0.42, 0.48), shade);
-        vec3 nearMtn = mix(vec3(0.34, 0.40, 0.46), vec3(0.20, 0.24, 0.29), shade);
-        color = mix(color, farMtn, farPeaks * 0.9);
-        color = mix(color, nearMtn, peaks * 0.94);
-        float mist = smoothstep(0.22, -0.2, h);
-        color = mix(color, haze, mist * 0.7);
+        vec3 farMtn = mix(vec3(0.05, 0.07, 0.1), vec3(0.02, 0.025, 0.035), shade);
+        vec3 nearMtn = mix(vec3(0.04, 0.05, 0.07), vec3(0.012, 0.014, 0.02), shade);
+        color = mix(color, farMtn, farPeaks * 0.95);
+        color = mix(color, nearMtn, peaks * 0.97);
+        float mist = smoothstep(0.02, -0.4, h);
+        color = mix(color, haze * 0.7, mist * 0.35);
         gl_FragColor = vec4(color, 1.0);
       }
     `,
@@ -447,6 +455,97 @@ function buildGroundWire() {
   }
 }
 
+function mountRanges(ranges: Group) {
+  void loadHero('/models/mountains.glb').then((hero) => {
+    if (!hero) return
+    fitHero(hero, 86, 'floor')
+    const leftover = [...ranges.children]
+    ranges.clear()
+    ranges.add(hero)
+    for (const child of leftover) {
+      const mesh = child as Mesh
+      mesh.geometry?.dispose()
+    }
+  })
+}
+
+function buildRidges(low: boolean) {
+  const ranges = new Group()
+  ranges.name = 'ranges'
+  const material = new MeshStandardMaterial({ color: '#8a97a3', roughness: 0.92, metalness: 0 })
+  material.customProgramCacheKey = () => 'blendy-ridge-v1'
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <common>',
+      '#include <common>\nvarying vec3 vWorldN;',
+    ).replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+      vWorldN = normalize(mat3(modelMatrix) * objectNormal);`,
+    )
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <common>',
+      '#include <common>\nvarying vec3 vWorldN;',
+    ).replace(
+      '#include <color_fragment>',
+      `#include <color_fragment>
+      float slope = 1.0 - clamp(vWorldN.y, 0.0, 1.0);
+      float snow = 1.0 - smoothstep(0.22, 0.62, slope);
+      vec3 rock = vec3(0.05, 0.06, 0.07);
+      vec3 cap = vec3(0.82, 0.86, 0.9);
+      diffuseColor.rgb = mix(rock, cap, snow);`,
+    )
+  }
+  const seg = low ? 24 : 56
+  const specs = [
+    { radius: 42, width: 38, height: 14, y: 1.2, seed: 0.4, count: 5 },
+    { radius: 78, width: 52, height: 22, y: 0.4, seed: 1.7, count: 6 },
+  ]
+  for (const spec of specs) {
+    for (let i = 0; i < spec.count; i += 1) {
+      const geometry = new PlaneGeometry(spec.width, spec.height, seg, low ? 8 : 14)
+      const position = geometry.attributes.position
+      if (!position) continue
+      for (let v = 0; v < position.count; v += 1) {
+        const x = position.getX(v)
+        const y = position.getY(v)
+        const u = x / spec.width + 0.5
+        const crest = Math.sin(u * Math.PI) 
+        const jag = Math.sin(u * 17 + spec.seed) * 0.18 + Math.sin(u * 7 + spec.seed * 2) * 0.28
+        const h = Math.max(0, y / spec.height)
+        position.setY(v, (crest * (0.45 + jag) + h * 0.15) * spec.height)
+        position.setZ(v, Math.sin(u * 11 + spec.seed) * 1.4 * crest)
+      }
+      geometry.computeVertexNormals()
+      const mesh = new Mesh(geometry, material)
+      const angle = (i / spec.count) * Math.PI * 2 + spec.seed
+      mesh.position.set(Math.cos(angle) * spec.radius, spec.y, Math.sin(angle) * spec.radius)
+      mesh.lookAt(0, spec.y + 2, 0)
+      mesh.castShadow = !low
+      mesh.receiveShadow = !low
+      ranges.add(mesh)
+    }
+  }
+  return ranges
+}
+
+function snowSprite() {
+  const canvas = document.createElement('canvas')
+  canvas.width = 64
+  canvas.height = 64
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+  const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32)
+  gradient.addColorStop(0, 'rgba(255,255,255,1)')
+  gradient.addColorStop(0.35, 'rgba(255,255,255,0.55)')
+  gradient.addColorStop(1, 'rgba(255,255,255,0)')
+  ctx.fillStyle = gradient
+  ctx.fillRect(0, 0, 64, 64)
+  const map = new CanvasTexture(canvas)
+  map.colorSpace = SRGBColorSpace
+  return map
+}
+
 function buildSnow(count: number) {
   const positions = new Float32Array(count * 3)
   const base: number[] = []
@@ -470,10 +569,13 @@ function buildSnow(count: number) {
   const points = new Points(
     geometry,
     new PointsMaterial({
-      color: '#f4f7f8',
-      size: 0.035,
+      color: '#f7fbff',
+      map: snowSprite() ?? undefined,
+      size: 0.22,
+      sizeAttenuation: true,
       transparent: true,
-      opacity: 0.55,
+      opacity: 0.85,
+      alphaTest: 0.08,
       depthWrite: false,
       blending: AdditiveBlending,
     }),
@@ -482,12 +584,12 @@ function buildSnow(count: number) {
 }
 
 const moodColor = new Color()
-const FAR_HAZE = new Color('#7e94a2')
+const FAR_HAZE = new Color('#10161c')
 
 function fogColor(mood: number) {
-  return moodColor.copy(HAZE).lerp(FAR_HAZE, mood > 1.15 ? 0.15 : 0)
+  return moodColor.copy(HAZE).lerp(FAR_HAZE, mood > 1.15 ? 0.35 : 0)
 }
 
 function fogDensity(mood: number) {
-  return mood > 1.2 ? 0.016 : 0.012
+  return mood > 1.2 ? 0.004 : 0.0032
 }
