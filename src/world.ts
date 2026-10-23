@@ -6,7 +6,7 @@ import {
   FogExp2,
   Float32BufferAttribute,
   Group,
-  LineSegments,
+  Vector3,
   WireframeGeometry,
   LinearFilter,
   LinearMipmapLinearFilter,
@@ -24,6 +24,9 @@ import {
   UnsignedByteType,
   type Scene,
 } from 'three'
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
 import { lerp } from './math'
 import type { Quality } from './quality'
 
@@ -407,153 +410,60 @@ function buildSky() {
   return sky
 }
 
-const WIRE_X = 0.55
-const WIRE_Z = 1.15
-
-function terrainHeight(x: number, z: number) {
-  const dx = x - WIRE_X
-  const dz = z - WIRE_Z
-  const r = Math.hypot(dx, dz)
-  // Shallow bowl under the dome, then hills that rise around it.
-  const bowl = -0.55 * Math.exp(-(r * r) / 7)
-  const hills =
-    Math.sin(x * 1.15 + 0.4) * Math.cos(z * 0.95 - 0.2) * 0.9 +
-    Math.sin(x * 0.52 - z * 0.4) * 0.62 +
-    Math.cos(z * 1.7 + x * 0.3) * 0.28
-  return hills + bowl
-}
-
 function edgeFade(x: number, z: number) {
-  const d = Math.hypot(x - WIRE_X, z - WIRE_Z)
-  const t = Math.min(1, Math.max(0, (d - 1.05) / 2.15))
+  const d = Math.hypot(x, z)
+  const t = Math.min(1, Math.max(0, (d - 8) / 16))
   const s = t * t * (3 - 2 * t)
   return 1 - s
 }
 
 function buildGroundWire() {
   const root = new Group()
-  const size = 12
-  const plane = new PlaneGeometry(size, size, 10, 10)
+  const size = 52
+  const plane = new PlaneGeometry(size, size, 40, 40)
   plane.rotateX(-Math.PI / 2)
   const pos = plane.attributes.position
   if (!pos) throw new Error('Terrain is missing positions')
-  const origin = terrainHeight(WIRE_X, WIRE_Z)
   for (let i = 0; i < pos.count; i += 1) {
-    const x = pos.getX(i)
-    const z = pos.getZ(i)
-    pos.setY(i, terrainHeight(x, z) - origin)
+    pos.setY(i, sampleHeight(pos.getX(i), pos.getZ(i)))
   }
   const wire = new WireframeGeometry(plane)
   const wpos = wire.attributes.position
-  const fade = new Float32Array(wpos.count)
-  for (let i = 0; i < wpos.count; i += 1) fade[i] = edgeFade(wpos.getX(i), wpos.getZ(i))
-  wire.setAttribute('aFade', new Float32BufferAttribute(fade, 1))
-  const lineMat = new ShaderMaterial({
-    transparent: true,
-    depthWrite: false,
-    fog: false,
-    toneMapped: false,
-    uniforms: { uOpacity: { value: 0.78 } },
-    vertexShader: /* glsl */ `
-      attribute float aFade;
-      varying float vFade;
-      void main() {
-        vFade = aFade;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      varying float vFade;
-      uniform float uOpacity;
-      void main() {
-        if (vFade < 0.02) discard;
-        gl_FragColor = vec4(vec3(0.78, 0.8, 0.82), vFade * uOpacity);
-      }
-    `,
-  })
-  root.add(new LineSegments(wire, lineMat))
+  const kept: number[] = []
+  const colors: number[] = []
+  const a = new Vector3()
+  const b = new Vector3()
+  for (let i = 0; i < wpos.count; i += 2) {
+    a.fromBufferAttribute(wpos, i)
+    b.fromBufferAttribute(wpos, i + 1)
+    const fade = edgeFade((a.x + b.x) * 0.5, (a.z + b.z) * 0.5)
+    if (fade < 0.05) continue
+    kept.push(a.x, a.y, a.z, b.x, b.y, b.z)
+    colors.push(fade, fade, fade, fade, fade, fade)
+  }
+  wire.dispose()
   plane.dispose()
-
-  const dots: number[] = []
-  const dotFade: number[] = []
-  for (let x = -7; x <= 8; x += 1.8) {
-    for (let z = -6; z <= 8; z += 1.8) {
-      const amount = edgeFade(x, z)
-      if (amount < 0.2) continue
-      dots.push(x, terrainHeight(x, z) - origin + 0.04, z)
-      dotFade.push(amount)
-    }
-  }
-  const dotGeo = new BufferGeometry()
-  dotGeo.setAttribute('position', new Float32BufferAttribute(dots, 3))
-  dotGeo.setAttribute('aFade', new Float32BufferAttribute(dotFade, 1))
-  const dotMat = new ShaderMaterial({
+  const geometry = new LineSegmentsGeometry()
+  geometry.setPositions(kept)
+  geometry.setColors(colors)
+  const lineMat = new LineMaterial({
+    color: 0xffffff,
+    linewidth: 1,
+    vertexColors: true,
     transparent: true,
+    opacity: 0.7,
+    depthTest: true,
     depthWrite: false,
-    fog: false,
-    toneMapped: false,
-    uniforms: { uOpacity: { value: 0.9 } },
-    vertexShader: /* glsl */ `
-      attribute float aFade;
-      varying float vFade;
-      void main() {
-        vFade = aFade;
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        gl_Position = projectionMatrix * mv;
-        gl_PointSize = 2.2;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      varying float vFade;
-      uniform float uOpacity;
-      void main() {
-        gl_FragColor = vec4(vec3(1.0), vFade * uOpacity);
-      }
-    `,
+    worldUnits: false,
   })
-  root.add(new Points(dotGeo, dotMat))
-
-  const air: number[] = []
-  const posts: Array<[number, number]> = [
-    [WIRE_X - 2.4, WIRE_Z + 1.6],
-    [WIRE_X + 2.2, WIRE_Z - 1.4],
-    [WIRE_X + 1.2, WIRE_Z + 2.5],
-  ]
-  for (const [x, z] of posts) {
-    const y = terrainHeight(x, z) - origin
-    air.push(x, y + 0.15, z, x, y + 1.35, z)
-  }
-  const airGeo = new BufferGeometry().setAttribute('position', new Float32BufferAttribute(air, 3))
-  const airFade = new Float32Array(air.length / 3).fill(0.55)
-  airGeo.setAttribute('aFade', new Float32BufferAttribute(airFade, 1))
-  const airMat = lineMat.clone()
-  airMat.uniforms = { uOpacity: { value: 0.35 } }
-  root.add(new LineSegments(airGeo, airMat))
-
-  const motes: number[] = []
-  const moteFade: number[] = []
-  for (let i = 0; i < 10; i += 1) {
-    const x = WIRE_X + Math.sin(i * 2.3) * 3.2
-    const z = WIRE_Z + Math.cos(i * 1.7) * 2.8
-    const fade = edgeFade(x, z)
-    if (fade < 0.25) continue
-    motes.push(x, terrainHeight(x, z) - origin + 0.08, z)
-    moteFade.push(fade)
-  }
-  const moteGeo = new BufferGeometry().setAttribute('position', new Float32BufferAttribute(motes, 3))
-  moteGeo.setAttribute('aFade', new Float32BufferAttribute(moteFade, 1))
-  const moteMat = dotMat.clone()
-  moteMat.uniforms = { uOpacity: { value: 0.7 } }
-  root.add(new Points(moteGeo, moteMat))
+  lineMat.toneMapped = false
+  root.add(new LineSegments2(geometry, lineMat))
 
   root.visible = false
   return {
     root,
     setOpacity(amount: number) {
-      lineMat.uniforms.uOpacity!.value = 0.78 * amount
-      dotMat.uniforms.uOpacity!.value = 0.9 * amount
-      airMat.uniforms.uOpacity!.value = 0.35 * amount
-      moteMat.uniforms.uOpacity!.value = 0.7 * amount
+      lineMat.opacity = 0.7 * amount
     },
   }
 }

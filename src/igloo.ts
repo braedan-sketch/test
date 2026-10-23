@@ -25,6 +25,9 @@ import {
   Vector3,
   type Object3D,
 } from 'three'
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import dracoWasm from 'three/examples/jsm/libs/draco/gltf/draco_decoder.wasm?url'
@@ -176,47 +179,15 @@ function buildSilhouette(center: Vector3, radius: number) {
   return root
 }
 
-function courseEdges(piece: Piece, core: Vector3) {
-  const source = new EdgesGeometry(piece.mesh.geometry, 18)
+function brickEdges(piece: Piece) {
+  const source = new EdgesGeometry(piece.mesh.geometry, 25)
   const position = source.getAttribute('position')
-  const kept: number[] = []
-  const a = new Vector3()
-  const b = new Vector3()
-  const mid = new Vector3()
-  const edge = new Vector3()
-  const center = piece.localCenter
-  const brickR = Math.hypot(center.x - core.x, center.z - core.z)
-  let jointLen = 0
-  const joint: number[] = []
-  for (let i = 0; i < position.count; i += 2) {
-    a.fromBufferAttribute(position, i)
-    b.fromBufferAttribute(position, i + 1)
-    edge.copy(b).sub(a)
-    const len = edge.length()
-    if (len < 0.07) continue
-    mid.copy(a).add(b).multiplyScalar(0.5).applyMatrix4(piece.mesh.matrix)
-    edge.transformDirection(piece.mesh.matrix)
-    const span = edge.length() || 1
-    const horizontal = Math.hypot(edge.x, edge.z) / span
-    const vertical = Math.abs(edge.y) / span
-    const midR = Math.hypot(mid.x - core.x, mid.z - core.z)
-    const outer = brickR < 0.45 || midR >= brickR * 0.9
-    if (!outer) continue
-    if (horizontal > 0.8) {
-      kept.push(a.x, a.y, a.z, b.x, b.y, b.z)
-      continue
-    }
-    if (vertical > 0.82 && len > jointLen) {
-      jointLen = len
-      joint.length = 0
-      joint.push(a.x, a.y, a.z, b.x, b.y, b.z)
-    }
+  if (!position || position.count < 2) {
+    source.dispose()
+    return null
   }
+  const geometry = new LineSegmentsGeometry().fromEdgesGeometry(source)
   source.dispose()
-  kept.push(...joint)
-  if (kept.length < 6) return null
-  const geometry = new BufferGeometry()
-  geometry.setAttribute('position', new Float32BufferAttribute(kept, 3))
   return geometry
 }
 
@@ -413,14 +384,16 @@ export async function loadIgloo(
   group.add(guides)
   guides.visible = false
 
-  const edgeMat = new LineBasicMaterial({
-    color: '#f4f7f8',
+  const edgeMat = new LineMaterial({
+    color: 0xffffff,
+    linewidth: 1.2,
     transparent: true,
-    opacity: 0.92,
-    fog: false,
-    toneMapped: false,
+    opacity: 0.85,
     depthTest: true,
+    depthWrite: false,
+    worldUnits: false,
   })
+  edgeMat.toneMapped = false
   // Depth-only shell, pushed back so the course lines stay visible and the far bricks don't.
   const depthMat = new MeshBasicMaterial({
     colorWrite: false,
@@ -438,9 +411,9 @@ export async function loadIgloo(
     depth.frustumCulled = false
     piece.mesh.add(depth)
     depthMeshes.push(depth)
-    const course = courseEdges(piece, core)
+    const course = brickEdges(piece)
     if (!course) continue
-    const edges = new LineSegments(course, edgeMat)
+    const edges = new LineSegments2(course, edgeMat)
     edges.name = 'brick-edge'
     piece.mesh.add(edges)
   }
@@ -559,7 +532,7 @@ export async function loadIgloo(
       guides.visible = false
       const showDepth = solid < 0.04 && dissolve < 0.2
       for (const depth of depthMeshes) depth.visible = showDepth
-      edgeMat.opacity = (1 - smoother(Math.min(1, solid * 1.4))) * (1 - smoother(dissolve)) * 0.92
+      edgeMat.opacity = (1 - smoother(Math.min(1, solid * 1.4))) * (1 - smoother(dissolve)) * 0.85
 
       const open = burst * (1 - smoother(dissolve))
       const presence = (1 - smoother(dissolve)) * solid

@@ -124,7 +124,8 @@ const ringsVertex = /* glsl */ `
   void main() {
     vec4 world = modelMatrix * vec4(position, 1.0);
     vWorld = world.xyz;
-    vNormal = normalize(mat3(modelMatrix) * normal);
+    vec3 nWorld = mat3(modelMatrix) * normal;
+    vNormal = length(nWorld) > 1e-5 ? nWorld / length(nWorld) : vec3(0.0, 1.0, 0.0);
     vUv = uv;
     gl_Position = projectionMatrix * viewMatrix * world;
   }
@@ -150,7 +151,9 @@ const ringsFragment = /* glsl */ `
       }
 
       vec3 envSample(vec3 dir) {
-        return toLinear(textureCube(uEnv, normalize(dir)).rgb);
+        float dLen = length(dir);
+        vec3 safeDir = dLen > 1e-5 ? dir / dLen : vec3(0.0, 1.0, 0.0);
+        return toLinear(textureCube(uEnv, safeDir).rgb);
       }
 
       vec3 perturb(vec3 n) {
@@ -181,8 +184,12 @@ const ringsFragment = /* glsl */ `
       }
 
       void main() {
-        vec3 n = perturb(normalize(vNormal));
-        vec3 v = normalize(cameraPosition - vWorld);
+        vec3 nGeom = vNormal;
+        float nLen = length(nGeom);
+        vec3 n = perturb(nLen > 1e-5 ? nGeom / nLen : vec3(0.0, 1.0, 0.0));
+        vec3 viewDelta = cameraPosition - vWorld;
+        float vLen = length(viewDelta);
+        vec3 v = vLen > 1e-5 ? viewDelta / vLen : vec3(0.0, 0.0, 1.0);
         float ndv = clamp(dot(n, v), 0.0, 1.0);
         float fresnel = pow(1.0 - ndv, 2.4);
         vec3 reflectDir = reflect(-v, n);
@@ -200,8 +207,8 @@ const ringsFragment = /* glsl */ `
         float rough = 0.22;
         if (uHasRough > 0.5) rough = texture2D(uRoughnessMap, vUv).g;
 
-        vec3 key = normalize(vec3(0.42, 0.86, 0.28));
-        vec3 rimLight = normalize(vec3(-0.55, 0.25, 0.75));
+        vec3 key = vec3(0.42, 0.86, 0.28) / length(vec3(0.42, 0.86, 0.28));
+        vec3 rimLight = vec3(-0.55, 0.25, 0.75) / length(vec3(-0.55, 0.25, 0.75));
         float gloss = mix(28.0, 140.0, 1.0 - rough);
         float spec = pow(max(dot(reflect(-key, n), v), 0.0), gloss);
         float spec2 = pow(max(dot(reflect(-rimLight, n), v), 0.0), 48.0);
@@ -232,12 +239,16 @@ const crystalVertex = /* glsl */ `
   varying vec3 vTangent;
   varying float vHand;
   varying vec2 vUv;
+  vec3 safeNormalize(vec3 v) {
+    float len = length(v);
+    return len > 1e-5 ? v / len : vec3(0.0, 1.0, 0.0);
+  }
   void main() {
     vObj = position;
     vec4 world = modelMatrix * vec4(position, 1.0);
     vWorld = world.xyz;
-    vNormal = normalize(mat3(modelMatrix) * normal);
-    vTangent = normalize(mat3(modelMatrix) * tangent.xyz);
+    vNormal = safeNormalize(mat3(modelMatrix) * normal);
+    vTangent = safeNormalize(mat3(modelMatrix) * tangent.xyz);
     vHand = tangent.w;
     vUv = uv;
     gl_Position = projectionMatrix * viewMatrix * world;
@@ -261,51 +272,42 @@ const crystalFragment = /* glsl */ `
   varying float vHand;
   varying vec2 vUv;
 
+  vec3 safeNormalize(vec3 v) {
+    float len = length(v);
+    return len > 1e-5 ? v / len : vec3(0.0, 1.0, 0.0);
+  }
+
   vec3 toLinear(vec3 c) {
     return pow(max(c, vec3(0.0)), vec3(2.2));
   }
 
   vec3 envGrey(vec3 dir) {
-    vec3 c = toLinear(textureCube(uEnv, normalize(dir)).rgb);
+    vec3 c = toLinear(textureCube(uEnv, safeNormalize(dir)).rgb);
     float l = dot(c, vec3(0.28, 0.54, 0.18));
     return vec3(l * 0.42, l * 0.46, l * 0.52);
   }
 
-  float hash13(vec3 p) {
-    return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);
-  }
-
   vec3 shadeNormal(vec3 n) {
-    vec3 base = n;
-    if (uHasNormal > 0.5) {
-      vec3 mapN = texture2D(uNormalMap, vUv).xyz * 2.0 - 1.0;
-      mapN.xy *= uNormalScale;
-      vec3 t = vTangent;
-      float tl = length(t);
-      if (tl > 1e-5) {
-        t /= tl;
-        vec3 b = cross(n, t) * vHand;
-        float bl = length(b);
-        if (bl > 1e-5) {
-          b /= bl;
-          vec3 bent = mat3(t, b, n) * mapN;
-          float nl = length(bent);
-          if (nl > 1e-5) base = bent / nl;
-        }
-      }
-    }
-    // Extra planar chips so a face is not one flat shade.
-    vec3 cell = floor(vObj * 8.0);
-    float h1 = hash13(cell) - 0.5;
-    float h2 = hash13(cell + vec3(19.0, 3.0, 7.0)) - 0.5;
-    vec3 side = normalize(cross(base, abs(base.y) > 0.92 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)));
-    vec3 lift = cross(side, base);
-    return normalize(base + side * h1 * 0.95 + lift * h2 * 0.95);
+    if (uHasNormal < 0.5) return n;
+    vec3 mapN = texture2D(uNormalMap, vUv).xyz * 2.0 - 1.0;
+    mapN.xy *= uNormalScale;
+    vec3 t = vTangent;
+    float tl = length(t);
+    if (tl < 1e-5) return n;
+    t /= tl;
+    vec3 b = cross(n, t) * vHand;
+    float bl = length(b);
+    if (bl < 1e-5) return n;
+    b /= bl;
+    vec3 bent = mat3(t, b, n) * mapN;
+    float nl = length(bent);
+    return nl > 1e-5 ? bent / nl : n;
   }
 
   void main() {
-    vec3 n = shadeNormal(normalize(vNormal));
-    vec3 v = normalize(cameraPosition - vWorld);
+    vec3 n = shadeNormal(safeNormalize(vNormal));
+    vec3 viewDelta = cameraPosition - vWorld;
+    vec3 v = length(viewDelta) > 1e-5 ? viewDelta / length(viewDelta) : vec3(0.0, 0.0, 1.0);
     float ndv = clamp(dot(n, v), 0.0, 1.0);
     float fresnel = pow(1.0 - ndv, 3.4);
     vec3 reflectDir = reflect(-v, n);
@@ -324,7 +326,7 @@ const crystalFragment = /* glsl */ `
 
     float rough = 0.55;
     if (uHasRough > 0.5) rough = clamp(texture2D(uRoughnessMap, vUv).g, 0.0, 1.0);
-    vec3 key = normalize(vec3(0.32, 0.9, 0.24));
+    vec3 key = safeNormalize(vec3(0.32, 0.9, 0.24));
     float gloss = mix(24.0, 120.0, 1.0 - rough * 0.55);
     float spec = pow(max(dot(reflect(-key, n), v), 0.0), gloss);
 

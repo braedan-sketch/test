@@ -59,9 +59,6 @@ declare global {
   }
 }
 
-// Dome center after the group yaw and the ground lift. Overhead shot uses the footprint.
-const DOME_TARGET: readonly [number, number, number] = [0.55, 1.15, 1.15]
-const DOME_DIR: readonly [number, number, number] = [0.7, 0.86, 1.16]
 // Dome center. Direction is about 6° down so the camera sits low and close.
 const EYE_TARGET: readonly [number, number, number] = [0.02, 3.05, 0.04]
 const EYE_DIR: readonly [number, number, number] = [0.42, 0.17, 1.5]
@@ -95,7 +92,7 @@ export async function startExperience(overlay: Overlay) {
   renderer.outputColorSpace = SRGBColorSpace
   renderer.toneMapping = NoToneMapping
   renderer.toneMappingExposure = 0.9
-  renderer.transmissionResolutionScale = quality.low ? 0.35 : 0.5
+  renderer.transmissionResolutionScale = quality.low ? 0.35 : 1
   renderer.setClearColor('#c5c8cc', 1)
   if (quality.shadows) {
     renderer.shadowMap.enabled = true
@@ -215,7 +212,7 @@ export async function startExperience(overlay: Overlay) {
 
   let figureGroup: Object3D | null = null
   const [meteor, rings, figure] = await Promise.all([
-    createMeteor(quality),
+    createMeteor(quality, renderer),
     createRings(quality),
     createFigure(quality),
   ])
@@ -518,13 +515,9 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
   let fov = 40
   if (phase.screen === 'field' || (phase.screen === 'rift' && phase.riftT < 0.02)) {
     fov = 40
-    // Wire hold is a 3/4 view, about 40° down. The eye pose is fully in by the solid frame.
-    const dolly = smoother(clamp((phase.fieldT - 0.32) / 0.12, 0, 1))
-    mix3(target, DOME_TARGET, EYE_TARGET, dolly)
+    // Wire and solid share this 3/4 eye pose, so the lines dissolve into the ice in place.
+    target.set(EYE_TARGET[0], EYE_TARGET[1], EYE_TARGET[2])
     up.set(0, 1, 0)
-    const dHigh =
-      aspect < 1 ? fitBox(4.6, 3.4, 0.62, 0.55, aspect, fov) : fitBox(4.6, 3.4, 0.42, 0.5, aspect, fov)
-    // Portrait eye distance is locked. Desktop is scaled off that distance so the dome is ~37% of the width.
     const span = phase.burst
     const eyeWidth = lerp(4.15, 4.75, span)
     const eyeHeight = lerp(2.07, 2.7, span)
@@ -532,11 +525,9 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
       aspect >= 1
         ? desktopEyeDistance(eyeWidth, eyeHeight, aspect, fov)
         : fitBox(eyeWidth, eyeHeight, 0.83, 0.5, aspect, fov)
-    placeAlong(scratchA, DOME_TARGET, DOME_DIR, dHigh)
-    placeAlong(scratchB, EYE_TARGET, EYE_DIR, dEye)
-    pos.copy(scratchA).lerp(scratchB, dolly)
+    placeAlong(pos, EYE_TARGET, EYE_DIR, dEye)
     // Look beside the dome so it sits in the centre-right third. Portrait is unchanged.
-    if (aspect >= 1) aimSubjectRight(target, pos, 0.16 * dolly, aspect, fov)
+    if (aspect >= 1) aimSubjectRight(target, pos, 0.16, aspect, fov)
   } else if (phase.screen === 'rift') {
     fov = 36
     const crystalTarget: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]

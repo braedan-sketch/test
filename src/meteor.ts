@@ -12,7 +12,9 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshPhysicalMaterial,
+  MeshStandardMaterial,
   PlaneGeometry,
+  PMREMGenerator,
   PointLight,
   ShaderMaterial,
   SphereGeometry,
@@ -20,8 +22,11 @@ import {
   SpriteMaterial,
   SRGBColorSpace,
   Texture,
+  Vector2,
   Vector3,
+  type WebGLRenderer,
 } from 'three'
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { brand } from './brand'
 import { hash01 } from './math'
 import { createGlassMaterial } from './glass'
@@ -122,7 +127,7 @@ function glowTexture() {
   return map
 }
 
-export async function createMeteor(quality: Quality): Promise<Meteor> {
+export async function createMeteor(quality: Quality, renderer: WebGLRenderer): Promise<Meteor> {
   const geometry = new IcosahedronGeometry(1, quality.low ? 2 : 3)
   const position = geometry.attributes.position
   if (!position) throw new Error('Crystal is missing positions')
@@ -209,21 +214,65 @@ export async function createMeteor(quality: Quality): Promise<Meteor> {
     crystal.visible = false
     core.visible = false
     if (sprite) sprite.visible = false
+    const envMap = quality.physicalCrystal ? studioRoom(renderer) : null
     hero.traverse((object) => {
       const mesh = object as Mesh
       if (!mesh.isMesh) return
       const source = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
-      const maps = source as { normalMap?: Texture | null; roughnessMap?: Texture | null }
+      const maps = source as {
+        normalMap?: Texture | null
+        roughnessMap?: Texture | null
+        normalScale?: Vector2
+      }
       const normalMap = maps.normalMap ?? null
       const roughnessMap = maps.roughnessMap ?? null
-      chipShard(mesh.geometry)
-      mesh.material = createGlassMaterial({
-        normalMap: normalMap ?? null,
-        roughnessMap: roughnessMap ?? null,
-        kind: 'crystal',
-      })
+      if (envMap) {
+        const physical = new MeshPhysicalMaterial({
+          color: new Color('#f4f8fb'),
+          roughness: 0.08,
+          metalness: 0,
+          transmission: 1,
+          thickness: 1.2,
+          ior: 1.45,
+          iridescence: 0.6,
+          iridescenceIOR: 1.3,
+          attenuationColor: new Color('#8aa4b8'),
+          attenuationDistance: 0.8,
+          envMap,
+          envMapIntensity: 1.4,
+          normalMap,
+          roughnessMap,
+        })
+        if (maps.normalScale) physical.normalScale.copy(maps.normalScale)
+        mesh.material = physical
+      } else {
+        mesh.material = createGlassMaterial({
+          normalMap,
+          roughnessMap,
+          kind: 'crystal',
+        })
+      }
+      if (source && source !== mesh.material && 'dispose' in source) {
+        const previous = source as MeshPhysicalMaterial
+        previous.normalMap = null
+        previous.roughnessMap = null
+        previous.map = null
+        previous.dispose()
+      }
     })
     fitHero(hero, 2.15)
+    const heart = new Mesh(
+      new SphereGeometry(0.16, 24, 16),
+      new MeshStandardMaterial({
+        color: '#12181e',
+        emissive: '#243240',
+        emissiveIntensity: 0.8,
+        roughness: 0.45,
+        metalness: 0,
+      }),
+    )
+    heart.name = 'crystal-core'
+    hero.add(heart)
     hero.rotation.y = 0.55
     group.add(hero)
     anchors = boxAnchors(hero)
@@ -259,38 +308,19 @@ export async function createMeteor(quality: Quality): Promise<Meteor> {
   }
 }
 
-function cellHash(ix: number, iy: number, iz: number) {
-  const n = Math.sin(ix * 127.1 + iy * 311.7 + iz * 74.7) * 43758.5453
-  return n - Math.floor(n)
-}
-
-// Break the clean prism into a chunky shard. Cells move together so each chip stays planar.
-function chipShard(geometry: BufferGeometry) {
-  const position = geometry.getAttribute('position')
-  const normal = geometry.getAttribute('normal')
-  if (!position || !normal) return
-  for (let i = 0; i < position.count; i += 1) {
-    const x = position.getX(i)
-    const y = position.getY(i)
-    const z = position.getZ(i)
-    const ix = Math.floor(x * 7.5)
-    const iy = Math.floor(y * 6.2)
-    const iz = Math.floor(z * 7.5)
-    const h = cellHash(ix, iy, iz)
-    const h2 = cellHash(ix + 5, iy + 13, iz + 2)
-    const h3 = cellHash(iy + 1, iz + 7, ix + 9)
-    const bite = h > 0.82 ? 0.1 + (h - 0.82) * 0.45 : (h - 0.5) * 0.09
-    const nx = normal.getX(i)
-    const ny = normal.getY(i)
-    const nz = normal.getZ(i)
-    position.setXYZ(
-      i,
-      x + nx * bite + (h2 - 0.5) * 0.03,
-      y + ny * bite + (h3 - 0.5) * 0.025,
-      z + nz * bite + (h2 - h3) * 0.02,
-    )
-  }
-  position.needsUpdate = true
+function studioRoom(renderer: WebGLRenderer) {
+  const room = new RoomEnvironment()
+  const pmrem = new PMREMGenerator(renderer)
+  const texture = pmrem.fromScene(room, 0.04).texture
+  pmrem.dispose()
+  room.traverse((object) => {
+    const mesh = object as Mesh
+    if (!mesh.isMesh) return
+    mesh.geometry.dispose()
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    for (const material of materials) material.dispose()
+  })
+  return texture
 }
 
 function boxAnchors(root: Group) {
