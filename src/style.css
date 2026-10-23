@@ -467,22 +467,24 @@ body[data-screen='rings'] .cycle {
   opacity: 0;
 }
 
-body[data-screen='meteor'],
 body[data-screen='figure'] {
   --ink: #f4f7f8;
   --ink-dim: rgba(244, 247, 248, 0.72);
 }
 
-body[data-screen='meteor'] .wordmark,
-body[data-screen='meteor'] .title,
-body[data-screen='meteor'] .legal,
-body[data-screen='meteor'] .corner,
-body[data-screen='meteor'] .kicker,
-body[data-screen='meteor'] .body,
-body[data-screen='meteor'] .rail,
-body[data-screen='meteor'] .sound,
-body[data-screen='meteor'] .telemetry,
-body[data-screen='meteor'] .cycle,
+body[data-screen='meteor'] {
+  --ink: #172024;
+  --ink-dim: rgba(23, 32, 36, 0.72);
+}
+
+body[data-screen='meteor'] .tag {
+  color: #172024;
+  text-shadow: none;
+}
+
+body[data-screen='meteor'] .leaders polyline { stroke: #172024; }
+body[data-screen='meteor'] .leaders circle { fill: #172024; }
+
 body[data-screen='figure'] .wordmark,
 body[data-screen='figure'] .title,
 body[data-screen='figure'] .legal,
@@ -506,7 +508,7 @@ body[data-screen='figure'] .frame i {
 
 body[data-screen='figure'] .frame i:nth-child(1) { top: 16vh; left: 14vw; }
 body[data-screen='figure'] .frame i:nth-child(2) { top: 16vh; right: 14vw; }
-body[data-screen='figure'] .frame i:nth-child(3) { bottom: 16vh; left: 14vw; }
+body[data-screen='figure'] .frame i:nth-child(3) { bottom: 3vh; left: 2.2vw; }
 body[data-screen='figure'] .frame i:nth-child(4) { bottom: 16vh; right: 14vw; }
 
 body[data-screen='field'] .leaders,
@@ -549,7 +551,12 @@ body[data-screen='meteor'] .tags {
     line-height: 1.35;
   }
   .stage[data-screen='figure'] .contact { margin-top: 6px; font-size: 10px; }
-  .stage[data-screen='meteor'] .sticky { justify-content: flex-start; }
+  .stage[data-screen='meteor'] .sticky {
+    align-items: flex-start;
+    justify-content: flex-start;
+    padding: 62vh 6vw 6vh;
+  }
+  .stage[data-screen='meteor'] .copy { max-width: 100%; }
   body[data-screen='figure'] .frame i:nth-child(1),
   body[data-screen='figure'] .frame i:nth-child(3) { left: 18px; }
   body[data-screen='figure'] .frame i:nth-child(2),

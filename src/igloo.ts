@@ -1,12 +1,16 @@
 import {
   AdditiveBlending,
+  AddEquation,
   Box3,
   BufferAttribute,
   BufferGeometry,
+  CustomBlending,
   EdgesGeometry,
   CanvasTexture,
   Float32BufferAttribute,
   Group,
+  OneFactor,
+  ZeroFactor,
   Line,
   LineBasicMaterial,
   LineSegments,
@@ -180,7 +184,7 @@ function buildSilhouette(center: Vector3, radius: number) {
 }
 
 function brickEdges(piece: Piece) {
-  const source = new EdgesGeometry(piece.mesh.geometry, 25)
+  const source = new EdgesGeometry(piece.mesh.geometry, 22)
   const position = source.getAttribute('position')
   if (!position || position.count < 2) {
     source.dispose()
@@ -395,19 +399,32 @@ export async function loadIgloo(
     worldUnits: false,
   })
   edgeMat.toneMapped = false
-  // Depth only. Scaled about 2% toward each brick's centre so front edges win the depth test.
+  // Depth only, and not a child of the brick: the solid mesh is hidden for the
+  // opening, which would hide any child lines with it. Custom blending keeps the
+  // shell in the opaque pass and adds no colour even if colorWrite is ignored.
   const depthMat = new MeshBasicMaterial({
     colorWrite: false,
     depthWrite: true,
     fog: false,
     toneMapped: false,
+    blending: CustomBlending,
+    blendEquation: AddEquation,
+    blendSrc: ZeroFactor,
+    blendDst: OneFactor,
     polygonOffset: true,
     polygonOffsetFactor: 1,
     polygonOffsetUnits: 1,
   })
   const depthMeshes: Mesh[] = []
+  const shells: Array<{ piece: Piece; holder: Group }> = []
   const brickCenter = new Box3()
   for (const piece of pieces) {
+    const holder = new Group()
+    holder.name = 'brick-wire'
+    holder.position.copy(piece.mesh.position)
+    holder.quaternion.copy(piece.mesh.quaternion)
+    holder.scale.copy(piece.mesh.scale)
+    piece.mesh.parent?.add(holder)
     const depth = new Mesh(piece.mesh.geometry, depthMat)
     depth.name = 'brick-depth'
     depth.frustumCulled = false
@@ -417,13 +434,16 @@ export async function loadIgloo(
       depth.scale.setScalar(0.98)
       depth.position.copy(brickCenter.getCenter(new Vector3())).multiplyScalar(0.02)
     }
-    piece.mesh.add(depth)
+    holder.add(depth)
     depthMeshes.push(depth)
     const course = brickEdges(piece)
-    if (!course) continue
-    const edges = new LineSegments2(course, edgeMat)
-    edges.name = 'brick-edge'
-    piece.mesh.add(edges)
+    if (course) {
+      const edges = new LineSegments2(course, edgeMat)
+      edges.name = 'brick-edge'
+      edges.frustumCulled = false
+      holder.add(edges)
+    }
+    shells.push({ piece, holder })
   }
 
   const coreMat = new ShaderMaterial({
@@ -540,10 +560,12 @@ export async function loadIgloo(
       guides.visible = false
       const showDepth = solid < 0.04 && dissolve < 0.2
       for (const depth of depthMeshes) depth.visible = showDepth
+      for (const piece of pieces) piece.mesh.visible = !showDepth
       const faceMat = bakedMaterial ?? procedural?.material ?? null
       if (faceMat) {
         faceMat.colorWrite = !showDepth
         faceMat.depthWrite = !showDepth
+        faceMat.opacity = 1
       }
       edgeMat.opacity = (1 - smoother(Math.min(1, solid * 1.4))) * (1 - smoother(dissolve))
 
@@ -576,6 +598,11 @@ export async function loadIgloo(
         piece.mesh.position.x += sway
         spin.setFromAxisAngle(piece.axis, t * piece.spin)
         piece.mesh.quaternion.copy(piece.baseQuat).multiply(spin)
+      }
+      for (const shell of shells) {
+        shell.holder.position.copy(shell.piece.mesh.position)
+        shell.holder.quaternion.copy(shell.piece.mesh.quaternion)
+        shell.holder.scale.copy(shell.piece.mesh.scale)
       }
     },
     fillLabels(target) {

@@ -55,11 +55,12 @@ export type Meteor = {
 /**
  * Opaque dotted card behind the shard. Transmission only refracts opaque
  * scene geometry, so a DOM or discarded-dot backdrop stays flat.
- * Colors match the meteor sky so the card does not read as a separate panel.
+ * The card is far larger than the frame and its colour feathers into the
+ * meteor sky, so no hard quad edge can sit beside the crystal.
  */
 function buildDotField() {
   const mesh = new Mesh(
-    new PlaneGeometry(36, 48),
+    new PlaneGeometry(160, 110),
     new ShaderMaterial({
       depthWrite: true,
       fog: false,
@@ -75,20 +76,24 @@ function buildDotField() {
       fragmentShader: /* glsl */ `
         varying vec2 vUv;
         void main() {
-          vec2 cell = abs(fract(vUv * vec2(62.0, 82.0)) - 0.5);
-          float dot = 1.0 - smoothstep(0.07, 0.14, length(cell));
+          vec2 cell = abs(fract(vUv * vec2(340.0, 234.0)) - 0.5);
+          float dot = 1.0 - smoothstep(0.08, 0.16, length(cell));
           vec3 paper = vec3(0.58, 0.59, 0.61);
           vec3 ink = vec3(0.28, 0.30, 0.33);
-          gl_FragColor = vec4(mix(paper, ink, dot * 0.85), 1.0);
+          vec3 color = mix(paper, ink, dot * 0.85);
+          vec2 q = abs(vUv - 0.5) * 2.0;
+          float edge = smoothstep(0.62, 1.0, max(q.x, q.y));
+          color = mix(color, paper, edge);
+          gl_FragColor = vec4(color, 1.0);
         }
       `,
     }),
   )
   mesh.name = 'dot-backdrop'
-  // Camera sits on +CRYSTAL_DIR. Face it, a few units behind the shard.
+  // Camera sits on +CRYSTAL_DIR. Park the card well behind the shard, facing it.
   const away = new Vector3(0.22, 0.04, 1).normalize()
-  mesh.position.copy(away).multiplyScalar(-4.2)
-  mesh.lookAt(0, 0, 0)
+  mesh.position.copy(away).multiplyScalar(-9)
+  mesh.lookAt(away.x * 40, away.y * 40, away.z * 40)
   mesh.frustumCulled = false
   return mesh
 }
@@ -242,21 +247,25 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
       if (envMap) {
         const physical = new MeshPhysicalMaterial({
           color: new Color('#ffffff'),
-          roughness: 0.08,
+          roughness: 0.03,
           metalness: 0,
           transmission: 1,
-          thickness: 0.6,
-          ior: 1.45,
-          iridescence: 0.6,
+          thickness: 1.2,
+          ior: 1.55,
+          dispersion: 0.4,
+          iridescence: 0.85,
           iridescenceIOR: 1.3,
-          attenuationColor: new Color('#c9d6e0'),
-          attenuationDistance: 3,
+          iridescenceThicknessRange: [180, 640],
+          attenuationColor: new Color('#eef3f7'),
+          attenuationDistance: 10,
+          specularIntensity: 1.15,
           envMap,
-          envMapIntensity: 2,
+          envMapIntensity: 0.8,
           normalMap,
         })
-        // The baked normal is heavy and pits the faces. Keep a light chip only.
-        physical.normalScale.set(0.35, 0.35)
+        // The baked normal is heavy. A light scale keeps the chip without
+        // scattering the dot grid into a milky centre.
+        physical.normalScale.set(0.18, 0.18)
         mesh.material = physical
       } else {
         mesh.material = createGlassMaterial({
@@ -281,7 +290,7 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
           map: glowMap,
           color: '#f4f8fb',
           transparent: true,
-          opacity: 0.15,
+          opacity: 0.3,
           blending: AdditiveBlending,
           depthWrite: false,
           depthTest: false,
@@ -289,7 +298,7 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
         }),
       )
       inner.name = 'crystal-glow'
-      inner.scale.setScalar(0.72)
+      inner.scale.setScalar(0.36)
       inner.renderOrder = 2
       hero.add(inner)
     }
@@ -333,9 +342,9 @@ function studioRoom(renderer: WebGLRenderer) {
   const room = new RoomEnvironment()
   // Hard rect lights so the ice catches a few white edges, not a flat studio wash.
   const strips: Array<[number, number, number, number, number, number, number]> = [
-    [7.2, 15.5, 9.4, 0.45, 6.4, 0.35, 36],
-    [-5.4, 19.2, 4.6, 9.5, 0.32, 0.28, 22],
-    [1.4, 7.2, 13.6, 4.2, 0.4, 0.22, 42],
+    [7.2, 15.5, 9.4, 0.45, 6.4, 0.35, 12],
+    [-5.4, 19.2, 4.6, 9.5, 0.32, 0.28, 7],
+    [1.4, 7.2, 13.6, 4.2, 0.4, 0.22, 14],
   ]
   for (const [x, y, z, sx, sy, sz, intensity] of strips) {
     const material = new MeshBasicMaterial({ toneMapped: false })

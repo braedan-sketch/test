@@ -6,8 +6,6 @@ import {
   FogExp2,
   Float32BufferAttribute,
   Group,
-  Vector3,
-  WireframeGeometry,
   LinearFilter,
   LinearMipmapLinearFilter,
   Mesh,
@@ -412,58 +410,55 @@ function buildSky() {
 
 function edgeFade(x: number, z: number) {
   const d = Math.hypot(x, z)
-  const t = Math.min(1, Math.max(0, (d - 8) / 16))
+  const t = Math.min(1, Math.max(0, (d - 5) / 18))
   const s = t * t * (3 - 2 * t)
   return 1 - s
 }
 
 function buildGroundWire() {
   const root = new Group()
-  const size = 52
-  const plane = new PlaneGeometry(size, size, 40, 40)
-  plane.rotateX(-Math.PI / 2)
-  const pos = plane.attributes.position
-  if (!pos) throw new Error('Terrain is missing positions')
-  for (let i = 0; i < pos.count; i += 1) {
-    pos.setY(i, sampleHeight(pos.getX(i), pos.getZ(i)))
-  }
-  const wire = new WireframeGeometry(plane)
-  const wpos = wire.attributes.position
-  const kept: number[] = []
+  // Even XZ courses, sampled onto the snow. No triangle diagonals.
+  const step = 0.85
+  const extent = 26
+  const positions: number[] = []
   const colors: number[] = []
-  const a = new Vector3()
-  const b = new Vector3()
-  for (let i = 0; i < wpos.count; i += 2) {
-    a.fromBufferAttribute(wpos, i)
-    b.fromBufferAttribute(wpos, i + 1)
-    const fade = edgeFade((a.x + b.x) * 0.5, (a.z + b.z) * 0.5)
-    if (fade < 0.05) continue
-    kept.push(a.x, a.y, a.z, b.x, b.y, b.z)
+  const yAt = (x: number, z: number) => sampleHeight(x, z) + 0.045
+  const push = (x0: number, z0: number, x1: number, z1: number) => {
+    const fade = edgeFade((x0 + x1) * 0.5, (z0 + z1) * 0.5)
+    if (fade < 0.04) return
+    positions.push(x0, yAt(x0, z0), z0, x1, yAt(x1, z1), z1)
     colors.push(fade, fade, fade, fade, fade, fade)
   }
-  wire.dispose()
-  plane.dispose()
+  for (let x = -extent; x <= extent + 1e-4; x += step) {
+    for (let z = -extent; z < extent - 1e-4; z += step) push(x, z, x, Math.min(extent, z + step))
+  }
+  for (let z = -extent; z <= extent + 1e-4; z += step) {
+    for (let x = -extent; x < extent - 1e-4; x += step) push(x, z, Math.min(extent, x + step), z)
+  }
   const geometry = new LineSegmentsGeometry()
-  geometry.setPositions(kept)
+  geometry.setPositions(positions)
   geometry.setColors(colors)
   const lineMat = new LineMaterial({
     color: 0xffffff,
-    linewidth: 1,
+    linewidth: 1.15,
     vertexColors: true,
     transparent: true,
-    opacity: 0.7,
+    opacity: 1,
     depthTest: true,
     depthWrite: false,
+    fog: false,
     worldUnits: false,
   })
   lineMat.toneMapped = false
-  root.add(new LineSegments2(geometry, lineMat))
+  const lines = new LineSegments2(geometry, lineMat)
+  lines.frustumCulled = false
+  root.add(lines)
 
   root.visible = false
   return {
     root,
     setOpacity(amount: number) {
-      lineMat.opacity = 0.7 * amount
+      lineMat.opacity = amount
     },
   }
 }

@@ -330,8 +330,9 @@ export async function startExperience(overlay: Overlay) {
       overlay.setUiDim(phase.screen === 'rings' ? 1 : 1 - phase.burst * 0.04)
       overlay.setScrollProgress(global)
 
-      if (phase.screen !== screen) {
-        screen = phase.screen
+      const nav = phase.screen === 'rift' && massCopyVisible() ? 'meteor' : phase.screen
+      if (nav !== screen) {
+        screen = nav
         overlay.setActive(screen)
       }
       if (!cornerPulsed && phase.burst > 0.04 && phase.screen === 'field') {
@@ -530,20 +531,22 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     if (aspect >= 1) aimSubjectRight(target, pos, 0.16, aspect, fov)
   } else if (phase.screen === 'rift') {
     fov = 36
-    const crystalTarget: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
+    const hold = crystalHold(aspect)
+    const crystalLook: [number, number, number] = [meteorCenter.x, crystalAimY(aspect, hold), meteorCenter.z]
+    const crystalPos: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
     const riftEye =
       aspect >= 1 ? desktopEyeDistance(4.75, 2.7, aspect, 40) : fitBox(4.75, 2.7, 0.83, 0.5, aspect, 40)
     placeAlong(scratchA, EYE_TARGET, EYE_DIR, riftEye)
-    placeAlong(scratchB, crystalTarget, CRYSTAL_DIR, crystalHold(aspect))
+    placeAlong(scratchB, crystalPos, CRYSTAL_DIR, hold)
     const riftBlend = smoother(phase.riftT)
-    mix3(target, EYE_TARGET, crystalTarget, riftBlend)
+    mix3(target, EYE_TARGET, crystalLook, riftBlend)
     pos.copy(scratchA).lerp(scratchB, riftBlend)
     if (aspect >= 1) aimSubjectRight(target, pos, 0.16 * (1 - riftBlend), aspect, 40)
   } else if (phase.screen === 'meteor') {
     fov = 34
     const hold = crystalHold(aspect)
-    target.set(meteorCenter.x, meteorCenter.y, meteorCenter.z)
-    placeAlong(pos, [target.x, target.y, target.z], CRYSTAL_DIR, hold)
+    target.set(meteorCenter.x, crystalAimY(aspect, hold), meteorCenter.z)
+    placeAlong(pos, [meteorCenter.x, meteorCenter.y, meteorCenter.z], CRYSTAL_DIR, hold)
     const leave = smoother(clamp((phase.meteorT - 0.9) / 0.1, 0, 1))
     if (leave > 0) {
       poseA.copy(pos)
@@ -737,8 +740,23 @@ function aimSubjectRight(look: Vector3, pos: Vector3, fraction: number, aspect: 
 
 /** Fitted crystal_v2 is 2.15 tall and about 1.5 wide. Height sets the frame. */
 function crystalHold(aspect: number) {
-  const fillH = aspect >= 1 ? 0.45 : 0.4
+  const fillH = aspect >= 1 ? 0.45 : 0.39
   return fitBox(1.5, 2.15, 0.8, fillH, aspect, 34)
+}
+
+/** Portrait only: drop the aim so the shard centre sits at 35% from the top. */
+function crystalAimY(aspect: number, distance: number) {
+  if (aspect >= 1) return meteorCenter.y
+  const vHalf = (34 * Math.PI) / 360
+  const ndcY = 1 - 2 * 0.35
+  return meteorCenter.y - ndcY * distance * Math.tan(vHalf)
+}
+
+function massCopyVisible() {
+  const title = document.querySelector(".stage[data-screen='meteor'] h2")
+  if (!(title instanceof HTMLElement)) return false
+  const rect = title.getBoundingClientRect()
+  return rect.top < window.innerHeight * 0.86 && rect.bottom > window.innerHeight * 0.05
 }
 
 function fitBox(width: number, height: number, fillW: number, fillH: number, aspect: number, fovDeg: number) {
@@ -822,8 +840,15 @@ function projectLabels(
     ndc.copy(slot.position).project(camera)
     const anchorX = (ndc.x * 0.5 + 0.5) * width
     const anchorY = (-ndc.y * 0.5 + 0.5) * height
-    const labelX = clamp(anchorX + slot.offsetX * scale, 24, width - 24)
-    const labelY = clamp(anchorY + slot.offsetY * scale, 24, height - 24)
+    let labelX = clamp(anchorX + slot.offsetX * scale, 24, width - 24)
+    let labelY = clamp(anchorY + slot.offsetY * scale, 24, height - 24)
+    if (slot.bent && height > width) {
+      const left = slot.offsetX <= 0
+      const low = Math.abs(slot.offsetY) > 60
+      labelX = left ? width * 0.12 : width * 0.88
+      const yFrac = left ? (low ? 0.46 : 0.14) : low ? 0.5 : 0.26
+      labelY = height * yFrac
+    }
     const behind = ndc.z > 1
     const off = anchorX < -200 || anchorX > width + 200 || anchorY < -200 || anchorY > height + 200
     const visible = !behind && !off && opacity > 0.02
