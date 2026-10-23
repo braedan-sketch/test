@@ -84,8 +84,8 @@ export async function createFigure(quality: Quality): Promise<Figure> {
         float bead = pow(clamp(1.0 - r * 2.15, 0.0, 1.0), 1.5);
         float depth = smoothstep(1.4, 7.5, vEye);
         float lit = clamp(vShade * (1.0 - depth * 0.35), 0.0, 1.0);
-        vec3 color = mix(vec3(0.08, 0.09, 0.11), vec3(0.94, 0.96, 0.98), lit);
-        color += vec3(0.22, 0.24, 0.26) * bead * lit;
+        vec3 color = mix(vec3(0.08, 0.09, 0.11), vec3(0.58, 0.62, 0.66), lit);
+        color += vec3(0.08, 0.09, 0.1) * bead * lit;
         gl_FragColor = vec4(color, vAlpha);
       }
     `,
@@ -148,9 +148,9 @@ export async function createFigure(quality: Quality): Promise<Figure> {
         float bead = pow(clamp(1.0 - r * 2.1, 0.0, 1.0), 1.7);
         float depth = smoothstep(1.2, 8.0, vEye);
         float lit = clamp(vShade * (1.0 - depth * 0.22), 0.0, 1.0);
-        vec3 color = mix(vec3(0.07, 0.08, 0.10), vec3(0.96, 0.97, 0.99), lit);
-        color += vec3(0.70, 0.82, 0.94) * vRim * 0.72;
-        color += vec3(0.16, 0.18, 0.2) * bead * lit;
+        vec3 color = mix(vec3(0.08, 0.09, 0.11), vec3(0.58, 0.62, 0.66), lit);
+        color += vec3(0.45, 0.55, 0.66) * vRim * 0.22;
+        color += vec3(0.08, 0.09, 0.1) * bead * lit;
         gl_FragColor = vec4(color, vAlpha);
       }
     `,
@@ -187,9 +187,9 @@ export async function createFigure(quality: Quality): Promise<Figure> {
     ring.position.y = 0.055 + i * 0.006
     plinth.add(ring)
   }
-  const key = new PointLight('#fff2e6', 28, 9, 2)
+  const key = new PointLight('#fff2e6', 8, 9, 2)
   key.position.set(1.4, 2.5, 1.7)
-  const rim = new PointLight('#8eb6d2', 18, 8, 2)
+  const rim = new PointLight('#8eb6d2', 5, 8, 2)
   rim.position.set(-1.55, 1.7, -1.15)
   root.add(plinth, key, rim)
 

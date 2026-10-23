@@ -209,6 +209,63 @@ function brickEdges(piece: Piece) {
   return geometry
 }
 
+/** Pull every course onto a hemisphere. The baked cap is a flat disc, so it goes. */
+function closeDome(group: Object3D) {
+  const shells: Mesh[] = []
+  const lids: Mesh[] = []
+  group.traverse((object) => {
+    if (!asMesh(object)) return
+    if (object.name.startsWith('Tunnel')) return
+    if (object.name.startsWith('Dome')) {
+      lids.push(object)
+      return
+    }
+    shells.push(object)
+  })
+  for (const lid of lids) lid.removeFromParent()
+  const bricks = shells.filter((mesh) => mesh.name.startsWith('Brick'))
+  if (bricks.length < 4) return
+  let cx = 0
+  let cz = 0
+  let yMin = Infinity
+  for (const mesh of bricks) {
+    cx += mesh.position.x
+    cz += mesh.position.z
+    yMin = Math.min(yMin, mesh.position.y)
+  }
+  cx /= bricks.length
+  cz /= bricks.length
+  let radiusSum = 0
+  let counted = 0
+  for (const mesh of bricks) {
+    const row = Number((mesh.userData as { row?: number }).row ?? 0)
+    if (row > 1) continue
+    radiusSum += Math.hypot(mesh.position.x - cx, mesh.position.z - cz)
+    counted += 1
+  }
+  const radius = counted > 0 ? radiusSum / counted : 1.45
+  const tangent = new Vector3()
+  const lean = new Quaternion()
+  for (const mesh of shells) {
+    const dx = mesh.position.x - cx
+    const dz = mesh.position.z - cz
+    const radial = Math.hypot(dx, dz) || 0.001
+    const rowRaw = Number((mesh.userData as { row?: number }).row ?? 0)
+    const row = clamp(Number.isFinite(rowRaw) ? rowRaw : 0, 0, 5)
+    const t = row / 5
+    // 16° at the base through 86° at the crown, so the top course closes the pole.
+    const phi = 0.28 + t * 1.22
+    const nextR = Math.max(0.05, radius * Math.cos(phi))
+    mesh.position.x = cx + (dx / radial) * nextR
+    mesh.position.z = cz + (dz / radial) * nextR
+    mesh.position.y = yMin + radius * Math.sin(phi)
+    tangent.set(-dz / radial, 0, dx / radial)
+    lean.setFromAxisAngle(tangent, phi)
+    mesh.quaternion.premultiply(lean)
+    mesh.scale.multiplyScalar(0.6 - t * 0.26)
+  }
+}
+
 function asMesh(object: Object3D): object is Mesh {
   return (object as Mesh).isMesh === true
 }
@@ -234,7 +291,7 @@ function prepareBakedMaterial(root: Object3D, uniforms: BlockUniforms) {
   material.toneMapped = true
   if (material.map) material.map.colorSpace = SRGBColorSpace
   material.fog = true
-  material.customProgramCacheKey = () => 'blendy-baked-igloo-v9'
+  material.customProgramCacheKey = () => 'blendy-baked-igloo-v11'
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uSolid = uniforms.uSolid
     shader.uniforms.uDissolve = uniforms.uDissolve
@@ -290,12 +347,15 @@ function prepareBakedMaterial(root: Object3D, uniforms: BlockUniforms) {
         vec3 n = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
         vec3 viewDir = normalize(cameraPosition - vWorld);
         float ndv = clamp(abs(dot(n, viewDir)), 0.0, 1.0);
-        float rim = pow(1.0 - ndv, 2.8);
-        float gap = smoothstep(0.08, 0.55, length(fwidth(n)));
-        float wrap = pow(ndv, 0.65);
-        diffuseColor.rgb = base * (0.45 + wrap * 0.7);
-        diffuseColor.rgb *= mix(1.0, 0.28, gap);
-        diffuseColor.rgb += vec3(1.15, 1.22, 1.3) * rim * 2.4;`,
+        float rim = pow(1.0 - ndv, 1.35);
+        float crease = length(fwidth(n));
+        float gap = smoothstep(0.015, 0.22, crease);
+        float bevel = smoothstep(0.04, 0.28, crease);
+        float wrap = pow(ndv, 0.55);
+        diffuseColor.rgb = base * (0.2 + wrap * 0.4);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.02, 0.025, 0.03), gap * 0.92);
+        diffuseColor.rgb += vec3(1.15, 1.25, 1.35) * bevel * 1.2;
+        diffuseColor.rgb += vec3(1.55, 1.68, 1.82) * rim * 2.35;`,
       )
   }
   return material
@@ -332,6 +392,7 @@ export async function loadIgloo(
   const bakedMaterial = baked ? prepareBakedMaterial(gltf.scene, uniforms) : null
   const group = gltf.scene
   group.rotation.y = YAW
+  closeDome(group)
 
   const pieces: Piece[] = []
   const box = new Box3()
@@ -408,7 +469,7 @@ export async function loadIgloo(
     const lead = piece.row >= 4 || piece.tunnel
     const rowSpan = lead ? 0.22 : 0.1 + piece.row * 0.028
     const jitter = hash01(hashString(piece.mesh.name || 'piece') * 1.7) * 0.04
-    piece.outDist = radius * Math.min(0.72, Math.max(0.28, rowSpan * 2.4 + jitter))
+    piece.outDist = radius * (0.62 + rowSpan * 1.35 + jitter)
     piece.lift = radius * (0.02 + Math.min(piece.row, 4) * 0.014)
     const rowLag = lead ? hash01(hashString(piece.mesh.name) * 3.3) * 0.05 : 0.05 + (4 - Math.min(piece.row, 4)) * 0.035
     piece.delay = Math.min(0.22, rowLag)
@@ -444,8 +505,8 @@ export async function loadIgloo(
   guides.visible = false
 
   const edgeMat = new LineMaterial({
-    color: 0xffffff,
-    linewidth: 1.25,
+    color: 0xf7fcff,
+    linewidth: 2.8,
     transparent: true,
     opacity: 1,
     depthTest: true,
@@ -652,19 +713,21 @@ export async function loadIgloo(
         faceMat.fog = !showDepth
         faceMat.opacity = 1
       }
-      edgeMat.opacity = (1 - smoother(Math.min(1, solid * 1.4))) * (1 - smoother(dissolve))
+      const settled = smoother(Math.min(1, solid * 1.15))
+      edgeMat.resolution.set(window.innerWidth, window.innerHeight)
+      edgeMat.opacity = (0.2 + settled * 0.8) * (1 - smoother(dissolve))
 
       const open = burst * (1 - smoother(dissolve))
       const presence = (1 - smoother(dissolve)) * solid
-      coreMat.uniforms.uGlow.value = (0.16 + open * 0.9) * presence
-      coreMesh.scale.setScalar(0.22 + open * 0.55)
+      coreMat.uniforms.uGlow.value = (1.25 + open * 0.5) * presence
+      coreMesh.scale.setScalar(Math.max(0.72, radius * (0.46 + open * 0.05)))
       glowLayers.forEach((layer, index) => {
-        const weight = index === 0 ? 0.16 : index === 1 ? 0.07 : 0.03
-        layer.material.opacity = (0.08 + open * 0.9) * weight * presence
+        const weight = index === 0 ? 0.72 : index === 1 ? 0.34 : 0.12
+        layer.material.opacity = (0.5 + open * 0.45) * weight * presence
         layer.material.toneMapped = false
-        layer.sprite.scale.setScalar(layer.scale * (0.42 + open * 0.7))
+        layer.sprite.scale.setScalar(layer.scale * (1.35 + open * 0.45))
       })
-      light.intensity = (0.35 + open * 7.5) * presence
+      light.intensity = (1.8 + open * 5.5) * presence
       light.distance = 3.2 + open * 2.4
       spill.intensity = (0.55 + open * 4.5) * presence
       spill.distance = 1.6 + open * 1.8

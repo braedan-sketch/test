@@ -356,9 +356,44 @@ body[data-screen='field'] .sound,
 body[data-screen='rift'] .wordmark,
 body[data-screen='rift'] .legal,
 body[data-screen='rift'] .corner,
-body[data-screen='rift'] .sound {
-  color: #f7fafc;
-  text-shadow: 0 1px 2px rgba(6, 10, 14, 0.55);
+body[data-screen='rift'] .sound,
+body[data-screen='meteor'] .wordmark,
+body[data-screen='meteor'] .legal,
+body[data-screen='meteor'] .corner,
+body[data-screen='meteor'] .kicker,
+body[data-screen='meteor'] .title,
+body[data-screen='meteor'] .body,
+body[data-screen='meteor'] .hint,
+body[data-screen='meteor'] .telemetry,
+body[data-screen='meteor'] .sound,
+body[data-screen='meteor'] .rail,
+body[data-screen='meteor'] .rail button,
+body[data-screen='rings'] .wordmark,
+body[data-screen='rings'] .legal,
+body[data-screen='rings'] .corner,
+body[data-screen='rings'] .kicker,
+body[data-screen='rings'] .title,
+body[data-screen='rings'] .body,
+body[data-screen='rings'] .hint,
+body[data-screen='rings'] .telemetry,
+body[data-screen='rings'] .sound,
+body[data-screen='rings'] .rail,
+body[data-screen='rings'] .rail button,
+body[data-screen='figure'] .wordmark,
+body[data-screen='figure'] .legal,
+body[data-screen='figure'] .corner,
+body[data-screen='figure'] .kicker,
+body[data-screen='figure'] .title,
+body[data-screen='figure'] .body,
+body[data-screen='figure'] .hint,
+body[data-screen='figure'] .telemetry,
+body[data-screen='figure'] .sound,
+body[data-screen='figure'] .rail,
+body[data-screen='figure'] .rail button,
+body[data-screen='figure'] .contact,
+body[data-screen='figure'] .cycle {
+  color: #f4f7fb;
+  text-shadow: 0 1px 2px rgba(6, 10, 14, 0.65);
 }
 .stage[data-screen='meteor'] .sticky { justify-content: flex-end; }
 .stage[data-screen='figure'] .sticky {
@@ -488,12 +523,12 @@ body[data-screen='meteor'] {
 }
 
 body[data-screen='meteor'] .tag {
-  color: #172024;
-  text-shadow: none;
+  color: #f4f7fb;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
 }
 
-body[data-screen='meteor'] .leaders polyline { stroke: #172024; }
-body[data-screen='meteor'] .leaders circle { fill: #172024; }
+body[data-screen='meteor'] .leaders polyline { stroke: rgba(244, 247, 251, 0.85); }
+body[data-screen='meteor'] .leaders circle { fill: #f4f7fb; }
 
 body[data-screen='figure'] .wordmark,
 body[data-screen='figure'] .title,

@@ -1,8 +1,6 @@
 import {
-  AdditiveBlending,
   BufferGeometry,
   Color,
-  CanvasTexture,
   DataTexture,
   FogExp2,
   Float32BufferAttribute,
@@ -14,11 +12,9 @@ import {
   NoColorSpace,
   PlaneGeometry,
   Points,
-  PointsMaterial,
   RGBAFormat,
   RepeatWrapping,
   ShaderMaterial,
-  SRGBColorSpace,
   SphereGeometry,
   BackSide,
   UnsignedByteType,
@@ -223,7 +219,8 @@ export function createWorld(scene: Scene, quality: Quality): World {
 
   const snow = buildSnow(quality.snow)
   scene.add(snow.points)
-  const ranges = buildRidges(quality.low)
+  const ranges = new Group()
+  ranges.name = 'ranges'
   scene.add(ranges)
   mountRanges(ranges)
 
@@ -242,7 +239,7 @@ export function createWorld(scene: Scene, quality: Quality): World {
         skyMat.uniforms.uWire!.value = wire
       }
       if (terrainMood) terrainMood.value = mood
-      // The ground plane is the field. In the crystal and fox shots it folds into a white ribbon.
+      // The displaced sheet is the Field only. In the rift it folds into a white blade.
       terrain.visible = field && wire < 0.45
       groundWire.root.visible = field && wire > 0.15
       groundWire.setOpacity(Math.min(1, Math.max(0, (wire - 0.15) / 0.5)))
@@ -362,22 +359,32 @@ function buildSky() {
         vec3 d = normalize(vDir);
         float h = d.y;
         float ang = atan(d.z, d.x);
-        float ridge = sin(ang * 1.7 + 0.4) * 0.55 + sin(ang * 3.4 + 1.1) * 0.32 + sin(ang * 6.8 + 0.2) * 0.16;
-        float ridgeFar = sin(ang * 2.4 + 2.1) * 0.42 + sin(ang * 5.2 + 0.5) * 0.22;
-        vec3 haze = vec3(0.09, 0.11, 0.15);
-        vec3 zenith = vec3(0.012, 0.016, 0.03);
-        vec3 color = mix(haze, zenith, smoothstep(-0.22, 0.32, h));
-        float crest = 0.07 + ridge * 0.2;
-        float peaks = smoothstep(crest + 0.045, crest - 0.04, h);
-        float crestFar = 0.0 + ridgeFar * 0.14;
-        float farPeaks = smoothstep(crestFar + 0.04, crestFar - 0.05, h) * (1.0 - peaks);
-        float shade = 0.42 + 0.58 * sin(ang * 3.1 + 0.8);
-        vec3 farMtn = mix(vec3(0.05, 0.07, 0.1), vec3(0.02, 0.025, 0.035), shade);
-        vec3 nearMtn = mix(vec3(0.04, 0.05, 0.07), vec3(0.012, 0.014, 0.02), shade);
-        color = mix(color, farMtn, farPeaks * 0.95);
-        color = mix(color, nearMtn, peaks * 0.97);
-        float mist = smoothstep(0.02, -0.4, h);
-        color = mix(color, haze * 0.7, mist * 0.35);
+        vec3 haze = vec3(0.58, 0.64, 0.70);
+        vec3 zenith = vec3(0.20, 0.26, 0.34);
+        vec3 color = mix(haze, zenith, smoothstep(-0.04, 0.55, h));
+        float n1 = sin(ang * 2.1 + 0.4) * 0.55 + sin(ang * 4.6 + 1.2) * 0.28 + sin(ang * 9.0 + 0.3) * 0.14;
+        float n2 = sin(ang * 3.3 + 2.0) * 0.48 + sin(ang * 7.1 + 0.6) * 0.24 + sin(ang * 13.0 + 1.4) * 0.12;
+        float n3 = sin(ang * 5.2 + 0.8) * 0.42 + sin(ang * 11.4 + 2.2) * 0.2;
+        float crestFar = -0.02 + n1 * 0.11;
+        float crestMid = 0.045 + n2 * 0.09;
+        float crestNear = 0.11 + n3 * 0.07;
+        float farM = smoothstep(crestFar + 0.02, crestFar - 0.012, h);
+        float midM = smoothstep(crestMid + 0.016, crestMid - 0.01, h);
+        float nearM = smoothstep(crestNear + 0.014, crestNear - 0.008, h);
+        float shade = 0.35 + 0.65 * sin(ang * 3.1 + 0.8);
+        vec3 snowCap = vec3(0.72, 0.76, 0.80);
+        vec3 rock = vec3(0.10, 0.12, 0.15);
+        vec3 farCol = mix(rock, snowCap, smoothstep(crestFar - 0.03, crestFar + 0.01, h) * 0.35);
+        farCol = mix(vec3(0.28, 0.33, 0.40), farCol, shade);
+        vec3 midCol = mix(rock * 0.7, snowCap, smoothstep(crestMid - 0.025, crestMid, h));
+        midCol *= 0.55 + shade * 0.5;
+        vec3 nearCol = mix(vec3(0.05, 0.06, 0.07), snowCap, smoothstep(crestNear - 0.02, crestNear, h));
+        nearCol *= 0.45 + shade * 0.55;
+        color = mix(color, farCol, farM * 0.72);
+        color = mix(color, midCol, midM * 0.88);
+        color = mix(color, nearCol, nearM * 0.95);
+        float mist = smoothstep(0.08, -0.25, h);
+        color = mix(color, haze, mist * 0.55);
         gl_FragColor = vec4(color, 1.0);
       }
     `,
@@ -456,98 +463,18 @@ function buildGroundWire() {
 }
 
 function mountRanges(ranges: Group) {
+  // Empty until Blender delivers the mesh. The sky shader is the shared range until then.
   void loadHero('/models/mountains.glb').then((hero) => {
     if (!hero) return
     fitHero(hero, 86, 'floor')
-    const leftover = [...ranges.children]
     ranges.clear()
     ranges.add(hero)
-    for (const child of leftover) {
-      const mesh = child as Mesh
-      mesh.geometry?.dispose()
-    }
   })
-}
-
-function buildRidges(low: boolean) {
-  const ranges = new Group()
-  ranges.name = 'ranges'
-  const material = new MeshStandardMaterial({ color: '#8a97a3', roughness: 0.92, metalness: 0 })
-  material.customProgramCacheKey = () => 'blendy-ridge-v1'
-  material.onBeforeCompile = (shader) => {
-    shader.vertexShader = shader.vertexShader.replace(
-      '#include <common>',
-      '#include <common>\nvarying vec3 vWorldN;',
-    ).replace(
-      '#include <begin_vertex>',
-      `#include <begin_vertex>
-      vWorldN = normalize(mat3(modelMatrix) * objectNormal);`,
-    )
-    shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <common>',
-      '#include <common>\nvarying vec3 vWorldN;',
-    ).replace(
-      '#include <color_fragment>',
-      `#include <color_fragment>
-      float slope = 1.0 - clamp(vWorldN.y, 0.0, 1.0);
-      float snow = 1.0 - smoothstep(0.22, 0.62, slope);
-      vec3 rock = vec3(0.05, 0.06, 0.07);
-      vec3 cap = vec3(0.82, 0.86, 0.9);
-      diffuseColor.rgb = mix(rock, cap, snow);`,
-    )
-  }
-  const seg = low ? 24 : 56
-  const specs = [
-    { radius: 42, width: 38, height: 14, y: 1.2, seed: 0.4, count: 5 },
-    { radius: 78, width: 52, height: 22, y: 0.4, seed: 1.7, count: 6 },
-  ]
-  for (const spec of specs) {
-    for (let i = 0; i < spec.count; i += 1) {
-      const geometry = new PlaneGeometry(spec.width, spec.height, seg, low ? 8 : 14)
-      const position = geometry.attributes.position
-      if (!position) continue
-      for (let v = 0; v < position.count; v += 1) {
-        const x = position.getX(v)
-        const y = position.getY(v)
-        const u = x / spec.width + 0.5
-        const crest = Math.sin(u * Math.PI) 
-        const jag = Math.sin(u * 17 + spec.seed) * 0.18 + Math.sin(u * 7 + spec.seed * 2) * 0.28
-        const h = Math.max(0, y / spec.height)
-        position.setY(v, (crest * (0.45 + jag) + h * 0.15) * spec.height)
-        position.setZ(v, Math.sin(u * 11 + spec.seed) * 1.4 * crest)
-      }
-      geometry.computeVertexNormals()
-      const mesh = new Mesh(geometry, material)
-      const angle = (i / spec.count) * Math.PI * 2 + spec.seed
-      mesh.position.set(Math.cos(angle) * spec.radius, spec.y, Math.sin(angle) * spec.radius)
-      mesh.lookAt(0, spec.y + 2, 0)
-      mesh.castShadow = !low
-      mesh.receiveShadow = !low
-      ranges.add(mesh)
-    }
-  }
-  return ranges
-}
-
-function snowSprite() {
-  const canvas = document.createElement('canvas')
-  canvas.width = 64
-  canvas.height = 64
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return null
-  const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32)
-  gradient.addColorStop(0, 'rgba(255,255,255,1)')
-  gradient.addColorStop(0.35, 'rgba(255,255,255,0.55)')
-  gradient.addColorStop(1, 'rgba(255,255,255,0)')
-  ctx.fillStyle = gradient
-  ctx.fillRect(0, 0, 64, 64)
-  const map = new CanvasTexture(canvas)
-  map.colorSpace = SRGBColorSpace
-  return map
 }
 
 function buildSnow(count: number) {
   const positions = new Float32Array(count * 3)
+  const sizes = new Float32Array(count)
   const base: number[] = []
   const speed: number[] = []
   const x: number[] = []
@@ -559,6 +486,7 @@ function buildSnow(count: number) {
     positions[i * 3] = px
     positions[i * 3 + 1] = py * 3
     positions[i * 3 + 2] = pz
+    sizes[i] = 0.65 + Math.random() * 1.1
     x.push(px)
     z.push(pz)
     base.push(py * 8)
@@ -566,20 +494,37 @@ function buildSnow(count: number) {
   }
   const geometry = new BufferGeometry()
   geometry.setAttribute('position', new Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('aSize', new Float32BufferAttribute(sizes, 1))
   const points = new Points(
     geometry,
-    new PointsMaterial({
-      color: '#f7fbff',
-      map: snowSprite() ?? undefined,
-      size: 0.22,
-      sizeAttenuation: true,
+    new ShaderMaterial({
       transparent: true,
-      opacity: 0.85,
-      alphaTest: 0.08,
-      depthWrite: false,
-      blending: AdditiveBlending,
+      depthWrite: true,
+      depthTest: true,
+      fog: false,
+      uniforms: { uPixel: { value: 1 } },
+      vertexShader: /* glsl */ `
+        attribute float aSize;
+        uniform float uPixel;
+        void main() {
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * mv;
+          float dist = max(0.4, -mv.z);
+          gl_PointSize = clamp(uPixel * aSize * (160.0 / dist), 8.0, 26.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        void main() {
+          vec2 d = gl_PointCoord - vec2(0.5);
+          float r = length(d);
+          float soft = exp(-r * r * 14.0) * smoothstep(0.5, 0.28, r);
+          if (soft < 0.02) discard;
+          gl_FragColor = vec4(vec3(0.94, 0.97, 1.0), soft * 0.7);
+        }
+      `,
     }),
   )
+  points.frustumCulled = false
   return { points, count, base, speed, x, z }
 }
 

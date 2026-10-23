@@ -63,8 +63,8 @@ declare global {
 }
 
 // Dome center. Direction is about 6° down so the camera sits low and close.
-const EYE_TARGET: readonly [number, number, number] = [0.02, 1.55, 0.04]
-const EYE_DIR: readonly [number, number, number] = [0.28, 0.72, 1.35]
+const EYE_TARGET: readonly [number, number, number] = [0.02, 0.78, 0.04]
+const EYE_DIR: readonly [number, number, number] = [0.18, 0.04, 1.7]
 const CRYSTAL_DIR: readonly [number, number, number] = [0.22, 0.04, 1]
 // Upright bust, base on the ring at y 0, ears near y 2. Look slightly up at the chest.
 const FOX_TARGET: readonly [number, number, number] = [0.0, 1.02, 0.0]
@@ -126,15 +126,15 @@ export async function startExperience(overlay: Overlay) {
     radius: 0.45,
   })
   const chromatic = new ChromaticAberrationEffect({
-    offset: new Vector2(0.0055, 0.0032),
+    offset: new Vector2(0.0028, 0.0016),
     radialModulation: true,
     modulationOffset: 0.28,
   })
   const softGpu = softwareGpu(renderer)
   const dof = new DepthOfFieldEffect(camera, {
     focusDistance: 8,
-    focusRange: 0.85,
-    bokehScale: quality.low ? 1.4 : softGpu ? 2.6 : 6.5,
+    focusRange: 2.6,
+    bokehScale: quality.low ? 0.7 : softGpu ? 1.3 : 3.2,
     resolutionScale: quality.low || softGpu ? 0.25 : 0.5,
   })
   const warp = new WarpEffect()
@@ -347,7 +347,7 @@ export async function startExperience(overlay: Overlay) {
       const phase = readPhase(global, marks)
 
       const wire = phase.screen === 'field' ? 1 - smoother(phase.solid) : 0
-      world.update(now / 1000, phase.mood, wire, phase.screen === 'field' || phase.screen === 'rift')
+      world.update(now / 1000, phase.mood, wire, phase.screen === 'field')
       clear.copy(world.fog.color)
       renderer.setClearColor(clear, 1)
       scene.environmentIntensity =
@@ -568,9 +568,9 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     const eyeWidth = lerp(4.15, 4.75, span)
     const eyeHeight = lerp(2.07, 2.7, span)
     const dEye =
-      aspect >= 1
+      (aspect >= 1
         ? desktopEyeDistance(eyeWidth, eyeHeight, aspect, fov)
-        : fitBox(eyeWidth, eyeHeight, 0.83, 0.5, aspect, fov)
+        : fitBox(eyeWidth, eyeHeight, 0.72, 0.42, aspect, fov)) * (aspect >= 1 ? 1.38 : 1.22)
     placeAlong(pos, EYE_TARGET, EYE_DIR, dEye)
     // Look beside the dome so it sits in the centre-right third. Portrait is unchanged.
     if (aspect >= 1) aimSubjectRight(target, pos, 0.16, aspect, fov)
@@ -580,7 +580,8 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     const crystalLook: [number, number, number] = [meteorCenter.x, crystalAimY(aspect, hold), meteorCenter.z]
     const crystalPos: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
     const riftEye =
-      aspect >= 1 ? desktopEyeDistance(4.75, 2.7, aspect, 40) : fitBox(4.75, 2.7, 0.83, 0.5, aspect, 40)
+      (aspect >= 1 ? desktopEyeDistance(4.75, 2.7, aspect, 40) : fitBox(4.75, 2.7, 0.72, 0.42, aspect, 40)) *
+      (aspect >= 1 ? 1.38 : 1.22)
     placeAlong(scratchA, EYE_TARGET, EYE_DIR, riftEye)
     placeAlong(scratchB, crystalPos, CRYSTAL_DIR, hold)
     const riftBlend = smoother(phase.riftT)
@@ -637,8 +638,8 @@ function placeRings(ringsT: number, aspect: number, pos: Vector3, target: Vector
 
 function placeFox(phase: Phase, aspect: number, pos: Vector3, target: Vector3, up: Vector3) {
   const orbit = clamp(phase.figureT / 0.7, 0, 1)
-  const fillH = 0.66
-  const fillW = aspect < 1 ? 0.92 : 0.55
+  const fillH = aspect < 1 ? 0.46 : 0.66
+  const fillW = aspect < 1 ? 0.58 : 0.55
   const dist = fitBox(1.18, 2.08, fillW, fillH, aspect, 34)
   const yaw = lerp(-0.02, 0.05, orbit)
   const dir: [number, number, number] = [
@@ -772,8 +773,9 @@ function aimSubjectRight(look: Vector3, pos: Vector3, fraction: number, aspect: 
 
 /** Fitted crystal_v2 is 2.15 tall and about 1.5 wide. Height sets the frame. */
 function crystalHold(aspect: number) {
-  const fillH = aspect >= 1 ? 0.45 : 0.39
-  return fitBox(1.5, 2.15, 0.8, fillH, aspect, 34)
+  const fillH = aspect >= 1 ? 0.42 : 0.26
+  const fillW = aspect >= 1 ? 0.72 : 0.5
+  return fitBox(1.5, 2.15, fillW, fillH, aspect, 34)
 }
 
 /** Portrait only: drop the aim so the shard centre sits at 35% from the top. */
@@ -832,11 +834,12 @@ function applyGrade(
   const burst = phase.screen === 'field' ? phase.burst : 0
   // One filmed grade for every scene. Bloom stays on the rims, not the snow.
   if (tone.blendMode.blendFunction !== BlendFunction.SRC) tone.blendMode.blendFunction = BlendFunction.SRC
-  bloom.intensity = 0.42 + burst * 0.12
-  bloom.luminanceMaterial.threshold = 0.68
+  const figure = phase.screen === 'figure'
+  bloom.intensity = figure ? 0.12 : 0.42 + burst * 0.12
+  bloom.luminanceMaterial.threshold = figure ? 0.92 : 0.68
   vignette.darkness = 0.68
   vignette.offset = 0.18
-  const fringe = 0.0055 + (phase.chroma > 0.02 ? phase.chroma * 0.004 : 0)
+  const fringe = 0.0028 + (phase.chroma > 0.02 ? phase.chroma * 0.002 : 0)
   chromatic.offset.set(fringe, fringe * 0.58)
   warp.setWarp(phase.ripple, phase.blur, phase.glitch, phase.white, phase.riftT + phase.figureT, aspect)
 }
