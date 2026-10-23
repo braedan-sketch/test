@@ -46,7 +46,7 @@ import { detectQuality, reducedMotion } from './quality'
 import { createRings } from './rings'
 import { Ambience } from './sound'
 import { WarpEffect } from './warp'
-import { createWorld, sampleHeight } from './world'
+import { createWorld } from './world'
 
 type Marks = { rift: number; meteor: number; rings: number; figure: number }
 
@@ -63,8 +63,8 @@ declare global {
 }
 
 // Dome center. Direction is about 6° down so the camera sits low and close.
-const EYE_TARGET: readonly [number, number, number] = [0.02, 0.78, 0.04]
-const EYE_DIR: readonly [number, number, number] = [0.18, 0.04, 1.7]
+const EYE_TARGET: readonly [number, number, number] = [0.06, 1.15, 0.12]
+const EYE_DIR: readonly [number, number, number] = [0.42, 0.18, 1.55]
 const CRYSTAL_DIR: readonly [number, number, number] = [0.22, 0.04, 1]
 // Upright bust, base on the ring at y 0, ears near y 2. Look slightly up at the chest.
 const FOX_TARGET: readonly [number, number, number] = [0.0, 1.02, 0.0]
@@ -94,7 +94,7 @@ export async function startExperience(overlay: Overlay) {
 
   renderer.outputColorSpace = SRGBColorSpace
   renderer.toneMapping = NoToneMapping
-  renderer.toneMappingExposure = 1.02
+  renderer.toneMappingExposure = 0.96
   renderer.transmissionResolutionScale = quality.low ? 0.35 : 1.75
   renderer.setClearColor('#c5c8cc', 1)
   if (quality.shadows) {
@@ -103,11 +103,11 @@ export async function startExperience(overlay: Overlay) {
   }
 
   const scene = new Scene()
-  const camera = new PerspectiveCamera(40, 1, 0.08, 420)
+  const camera = new PerspectiveCamera(40, 1, 0.08, 1600)
   // Layer 1 is the crystal's inner glow. It stays out of the opaque
   // transmission pre-pass and is drawn with the transparent objects.
   camera.layers.enable(1)
-  const world = createWorld(scene, quality)
+  const world = createWorld(scene, quality, renderer)
   scene.environment = createEnvironment(renderer)
   scene.environmentIntensity = 0.35
   addLights(scene, quality.shadows)
@@ -133,7 +133,7 @@ export async function startExperience(overlay: Overlay) {
   const softGpu = softwareGpu(renderer)
   const dof = new DepthOfFieldEffect(camera, {
     focusDistance: 8,
-    focusRange: 2.6,
+    focusRange: 4.2,
     bokehScale: quality.low ? 0.7 : softGpu ? 1.3 : 3.2,
     resolutionScale: quality.low || softGpu ? 0.25 : 0.5,
   })
@@ -305,7 +305,7 @@ export async function startExperience(overlay: Overlay) {
     }
   }
 
-  void loadIgloo(quality, sampleHeight, (value) => {
+  void loadIgloo(quality, renderer, (value) => {
     targetProgress = Math.max(targetProgress, value)
   })
     .then((loaded) => {
@@ -568,9 +568,9 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     const eyeWidth = lerp(4.15, 4.75, span)
     const eyeHeight = lerp(2.07, 2.7, span)
     const dEye =
-      (aspect >= 1
-        ? desktopEyeDistance(eyeWidth, eyeHeight, aspect, fov)
-        : fitBox(eyeWidth, eyeHeight, 0.72, 0.42, aspect, fov)) * (aspect >= 1 ? 1.38 : 1.22)
+      aspect >= 1
+        ? desktopEyeDistance(eyeWidth, eyeHeight, aspect, fov) * 0.82
+        : fitBox(eyeWidth, eyeHeight, 0.78, 0.58, aspect, fov)
     placeAlong(pos, EYE_TARGET, EYE_DIR, dEye)
     // Look beside the dome so it sits in the centre-right third. Portrait is unchanged.
     if (aspect >= 1) aimSubjectRight(target, pos, 0.16, aspect, fov)
@@ -580,8 +580,9 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     const crystalLook: [number, number, number] = [meteorCenter.x, crystalAimY(aspect, hold), meteorCenter.z]
     const crystalPos: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
     const riftEye =
-      (aspect >= 1 ? desktopEyeDistance(4.75, 2.7, aspect, 40) : fitBox(4.75, 2.7, 0.72, 0.42, aspect, 40)) *
-      (aspect >= 1 ? 1.38 : 1.22)
+      aspect >= 1
+        ? desktopEyeDistance(4.75, 2.7, aspect, 40) * 0.82
+        : fitBox(4.75, 2.7, 0.78, 0.58, aspect, 40)
     placeAlong(scratchA, EYE_TARGET, EYE_DIR, riftEye)
     placeAlong(scratchB, crystalPos, CRYSTAL_DIR, hold)
     const riftBlend = smoother(phase.riftT)
@@ -624,16 +625,11 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
 }
 
 function placeRings(ringsT: number, aspect: number, pos: Vector3, target: Vector3, up: Vector3) {
-  const framed = fitBox(4.6, 4.6, 0.7, 0.85, aspect, 36)
-  const far = framed * 1.25
-  const near = framed * 0.6
-  // The last part of the old dive looked straight down into the glass and
-  // came back fully black on Metal. Hold the height once the rings fill the frame.
-  const y = Math.max(framed * 0.9, lerp(far, near, smoother(ringsT)))
-  const roll = Math.min(1, ringsT) * 0.08
-  pos.set(0, y, 0)
-  target.set(0, 0.15, 0)
-  up.set(Math.sin(roll), 0, Math.cos(roll))
+  const dist = fitBox(4.6, 2.2, aspect < 1 ? 0.78 : 0.7, aspect < 1 ? 0.42 : 0.46, aspect, 36) * 0.78
+  const yaw = 0.55 + ringsT * 0.08
+  pos.set(Math.sin(yaw) * dist, Math.max(0.9, dist * 0.2), Math.cos(yaw) * dist)
+  target.set(0, 0.42, 0)
+  up.set(0, 1, 0)
 }
 
 function placeFox(phase: Phase, aspect: number, pos: Vector3, target: Vector3, up: Vector3) {
@@ -714,7 +710,7 @@ function brickScreenBounds(igloo: Igloo | null, camera: PerspectiveCamera, probe
   igloo.group.updateWorldMatrix(true, true)
   igloo.group.traverse((object) => {
     if (!(object instanceof Mesh)) return
-    if (!object.geometry.getAttribute('aSeed')) return
+    if (!object.name.startsWith('igloo_')) return
     piece.setFromObject(object)
     if (!any) {
       box.copy(piece)
@@ -832,13 +828,14 @@ function applyGrade(
   aspect: number,
 ) {
   const burst = phase.screen === 'field' ? phase.burst : 0
-  // One filmed grade for every scene. Bloom stays on the rims, not the snow.
+  // Seams bloom on the hero. The fox stays under the threshold.
   if (tone.blendMode.blendFunction !== BlendFunction.SRC) tone.blendMode.blendFunction = BlendFunction.SRC
   const figure = phase.screen === 'figure'
-  bloom.intensity = figure ? 0.12 : 0.42 + burst * 0.12
-  bloom.luminanceMaterial.threshold = figure ? 0.92 : 0.68
-  vignette.darkness = 0.68
-  vignette.offset = 0.18
+  const heroGlow = phase.screen === 'field' || phase.screen === 'rift'
+  bloom.intensity = figure ? 0.12 : heroGlow ? 0.88 + burst * 0.08 : 0.72
+  bloom.luminanceMaterial.threshold = figure ? 0.92 : 0.8
+  vignette.darkness = 0.55
+  vignette.offset = 0.35
   const fringe = 0.0028 + (phase.chroma > 0.02 ? phase.chroma * 0.002 : 0)
   chromatic.offset.set(fringe, fringe * 0.58)
   warp.setWarp(phase.ripple, phase.blur, phase.glitch, phase.white, phase.riftT + phase.figureT, aspect)

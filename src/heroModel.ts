@@ -1,8 +1,20 @@
-import { Box3, Group, Vector3 } from 'three'
+import { Box3, Group, Vector3, type WebGLRenderer } from 'three'
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js'
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import dracoWasm from 'three/examples/jsm/libs/draco/gltf/draco_decoder.wasm?url'
 import dracoWrapper from 'three/examples/jsm/libs/draco/gltf/draco_wasm_wrapper.js?url'
+
+let basisLoader: KTX2Loader | null = null
+
+function ktx2Loader(renderer: WebGLRenderer) {
+  if (!basisLoader) {
+    basisLoader = new KTX2Loader()
+    basisLoader.detectSupport(renderer)
+  }
+  return basisLoader
+}
 
 /** Asset URL that follows Vite's base, including `./` for a folder-relative build. */
 export function publicUrl(path: string) {
@@ -14,7 +26,7 @@ export function publicUrl(path: string) {
  * Load a hero GLB when the file exists. A missing file, or a file that fails
  * to parse, returns null so the scene can keep its procedural stand-in.
  */
-export async function loadHero(url: string): Promise<Group | null> {
+export async function loadHero(url: string, renderer?: WebGLRenderer): Promise<Group | null> {
   url = publicUrl(url)
   try {
     const head = await fetch(url, { method: 'HEAD' })
@@ -28,6 +40,8 @@ export async function loadHero(url: string): Promise<Group | null> {
   draco.setDecoderPath({ js: dracoWrapper, wasm: dracoWasm })
   const loader = new GLTFLoader()
   loader.setDRACOLoader(draco)
+  loader.setMeshoptDecoder(MeshoptDecoder)
+  if (renderer) loader.setKTX2Loader(ktx2Loader(renderer))
   try {
     const gltf = await loader.loadAsync(url)
     const scene = gltf.scene

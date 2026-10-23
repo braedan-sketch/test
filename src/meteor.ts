@@ -277,6 +277,7 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
           normalMap,
         })
         physical.normalScale.set(0.08, 0.08)
+        physical.fog = false
         crystalEdge(physical)
         mesh.castShadow = false
         mesh.receiveShadow = false
