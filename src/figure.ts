@@ -121,9 +121,11 @@ export async function createFigure(quality: Quality): Promise<Figure> {
       varying float vAlpha;
       void main() {
         vSeed = aSeed;
-        float lambert = dot(normalize(normal), normalize(vec3(-0.35, 0.82, 0.4)));
-        float under = smoothstep(0.05, -0.75, normal.y);
-        vShade = clamp(mix(0.28 + 0.72 * lambert, 0.08, under), 0.0, 1.0);
+      vec3 n = normalize(mat3(modelMatrix) * normal);
+      float ndl = dot(n, normalize(vec3(0.55, 0.7, -0.28)));
+      float wrap = clamp(ndl * 0.9 + 0.2, 0.0, 1.0);
+      float under = smoothstep(0.3, -0.5, n.y);
+      vShade = clamp(mix(wrap, wrap * 0.42, under), 0.0, 1.0);
         float gate = smoothstep(aSeed * 0.45, aSeed * 0.45 + 0.22, uAppear);
         vec3 p = position;
         float s = sin(uTime * 1.15 + aSeed * 40.0);
@@ -135,7 +137,7 @@ export async function createFigure(quality: Quality): Promise<Figure> {
         p.z += lift * (fract(aSeed * 13.7) - 0.5) * 0.42;
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
         gl_Position = projectionMatrix * mv;
-        gl_PointSize = clamp(uPixel * (4.6 / max(1.0, -mv.z)), 0.3, 1.55);
+        gl_PointSize = clamp(uPixel * (10.0 / max(1.0, -mv.z)), 1.15, 2.4);
         vAlpha = gate * (1.0 - smoothstep(0.35, 0.96, uBlow));
       }
     `,
@@ -148,21 +150,21 @@ export async function createFigure(quality: Quality): Promise<Figure> {
         float r = length(d);
         if (r > 0.5) discard;
         float falloff = smoothstep(0.5, 0.12, r);
-        vec3 color = mix(vec3(0.10, 0.12, 0.14), vec3(0.94, 0.96, 0.98), vShade);
-        gl_FragColor = vec4(color, falloff * vAlpha * 0.72);
+        vec3 color = mix(vec3(0.16, 0.19, 0.24), vec3(0.97, 0.98, 1.0), vShade);
+        gl_FragColor = vec4(color, falloff * vAlpha * 0.94);
       }
     `,
   })
   let active = material
 
   const disc = new Mesh(
-    new TorusGeometry(0.58, 0.009, 10, 96),
+    new TorusGeometry(0.5, 0.007, 12, 120),
     new MeshBasicMaterial({ color: '#f7fbff', toneMapped: false }),
   )
   disc.rotation.x = Math.PI / 2
-  disc.position.y = 0.015
+  disc.position.y = 0.012
   const inner = new Mesh(
-    new TorusGeometry(0.38, 0.005, 8, 80),
+    new TorusGeometry(0.34, 0.004, 8, 96),
     new MeshBasicMaterial({
       color: '#ffffff',
       transparent: true,
@@ -174,7 +176,7 @@ export async function createFigure(quality: Quality): Promise<Figure> {
   inner.rotation.x = Math.PI / 2
   inner.position.y = 0.02
   const glow = new Mesh(
-    new TorusGeometry(0.58, 0.02, 8, 80),
+    new TorusGeometry(0.5, 0.02, 8, 96),
     new MeshBasicMaterial({
       color: '#d5e6f0',
       transparent: true,
@@ -188,6 +190,8 @@ export async function createFigure(quality: Quality): Promise<Figure> {
   glow.position.y = 0.01
   root.add(disc, inner, glow)
 
+  const turn = new Group()
+  root.add(turn)
   const cloud = await loadHero('/models/fox_points.glb')
   const sampled = cloud?.getObjectByProperty('type', 'Points')
   if (sampled instanceof Points && sampled.geometry.getAttribute('normal')) {
@@ -198,19 +202,19 @@ export async function createFigure(quality: Quality): Promise<Figure> {
     for (let i = 0; i < count; i += 1) seeds[i] = hashUnit(i)
     source.setAttribute('aSeed', new BufferAttribute(seeds, 1))
     sampled.material = normalMaterial
-    sampled.scale.multiplyScalar(0.86)
     points.visible = false
-    root.add(sampled)
-    root.updateWorldMatrix(true, true)
+    turn.add(sampled)
+    turn.updateWorldMatrix(true, true)
     const box = new Box3().setFromObject(sampled)
-    sampled.position.y += 0.02 - box.min.y
+    sampled.position.y += 0.01 - box.min.y
     active = normalMaterial
   }
-  root.rotation.y = 0.35
 
   return {
     group: root,
     update(appear, blow, time, pixelRatio) {
+      // A few degrees, slow. The ring stays put under the bust.
+      turn.rotation.y = 0.62 + Math.sin(time * 0.28) * 0.06
       root.visible = appear > 0.01 && blow < 0.995
       active.uniforms.uAppear!.value = appear
       active.uniforms.uBlow!.value = blow

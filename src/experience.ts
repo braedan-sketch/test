@@ -29,7 +29,9 @@ import {
   Vector3,
   WebGLRenderer,
   HalfFloatType,
+  Box3,
   Color,
+  type Object3D,
 } from 'three'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { brand, type ScreenId } from './brand'
@@ -59,13 +61,14 @@ declare global {
 // Dome center after the group yaw and the ground lift. Overhead shot uses the footprint.
 const DOME_TARGET: readonly [number, number, number] = [0.05, 2.15, 0.12]
 const DOME_DIR: readonly [number, number, number] = [0.1, 1, 0.26]
-// Eye-level center of the stone dome, camera in front and slightly above.
-const EYE_TARGET: readonly [number, number, number] = [0.1, 3.15, 0.04]
+// Eye-level aim sits a little above the dome center so the mass reads lower-middle,
+// with the tunnel and a strip of foreground snow still inside the frame.
+const EYE_TARGET: readonly [number, number, number] = [0.06, 1.9, 0.05]
 const EYE_DIR: readonly [number, number, number] = [0.48, 0.34, 1.55]
 const CRYSTAL_DIR: readonly [number, number, number] = [0.22, 0.04, 1]
-// Seated fox: hips on the ring, head near y 1.3, tail off to +X.
-const FOX_TARGET: readonly [number, number, number] = [0.04, 0.82, 0.12]
-const FOX_DIR: readonly [number, number, number] = [0.32, 0.08, 1.2]
+// Upright bust, base on the ring at y 0, ears near y 2. Look slightly up at the chest.
+const FOX_TARGET: readonly [number, number, number] = [0.0, 1.02, 0.0]
+const FOX_DIR: readonly [number, number, number] = [0.32, -0.12, 1.05]
 const scratchA = new Vector3()
 const scratchB = new Vector3()
 
@@ -96,7 +99,7 @@ export async function startExperience(overlay: Overlay) {
   }
 
   const scene = new Scene()
-  const camera = new PerspectiveCamera(40, 1, 0.08, 280)
+  const camera = new PerspectiveCamera(40, 1, 0.08, 420)
   const world = createWorld(scene, quality)
   scene.environment = createEnvironment(renderer)
   scene.environmentIntensity = 0.35
@@ -195,12 +198,14 @@ export async function startExperience(overlay: Overlay) {
     },
   }
 
+  let figureGroup: Object3D | null = null
   const [meteor, rings, figure] = await Promise.all([
     createMeteor(quality),
     createRings(quality),
     createFigure(quality),
   ])
   scene.add(meteor.group, rings.group, figure.group)
+  figureGroup = figure.group
   meteor.group.visible = false
   rings.group.visible = false
   figure.group.visible = false
@@ -224,6 +229,8 @@ export async function startExperience(overlay: Overlay) {
         minusX: project(-2, 1.8, 0.55),
         plusZ: project(0.3, 1.8, 2.5),
         minusZ: project(0.3, 1.8, -1.5),
+        bounds: brickScreenBounds(igloo, camera, probe),
+        fox: objectScreenBounds(figureGroup, camera, probe),
       }
     }
   }
@@ -478,16 +485,16 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     else up.normalize()
     // Overhead dome is the ~5.1 footprint. fillH stays loose so width (35%) wins on both aspects.
     const dHigh = fitBox(5.15, 4.55, 0.34, 0.72, aspect, fov)
-    // Box grows with the drift so the solid dome and the opened dome both land near 75% width.
+    // Desktop is height-limited (~37% of the frame for the whole igloo). Portrait is width-limited (~75%).
     const span = phase.burst
-    const dEye = fitBox(lerp(5.15, 5.4, span), lerp(3.45, 3.65, span), 0.7, 0.48, aspect, fov)
+    const dEye = fitBox(lerp(5.3, 6.5, span), lerp(3.75, 5.15, span), 0.62, 0.28, aspect, fov)
     placeAlong(scratchA, DOME_TARGET, DOME_DIR, dHigh)
     placeAlong(scratchB, EYE_TARGET, EYE_DIR, dEye)
     pos.copy(scratchA).lerp(scratchB, dolly)
   } else if (phase.screen === 'rift') {
     fov = 36
     const crystalTarget: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
-    placeAlong(scratchA, EYE_TARGET, EYE_DIR, fitBox(5.4, 3.65, 0.7, 0.48, aspect, 40))
+    placeAlong(scratchA, EYE_TARGET, EYE_DIR, fitBox(6.5, 5.15, 0.62, 0.28, aspect, 40))
     placeAlong(scratchB, crystalTarget, CRYSTAL_DIR, fitBox(1.9, 2.55, 0.78, 0.7, aspect, fov))
     mix3(target, EYE_TARGET, crystalTarget, smoother(phase.riftT))
     pos.copy(scratchA).lerp(scratchB, smoother(phase.riftT))
@@ -514,9 +521,9 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
   } else {
     fov = 34
     const orbit = clamp(phase.figureT / 0.7, 0, 1)
-    // Seated fox is ~1.55 wide and ~1.82 tall. 70% of portrait width, height-capped on desktop.
-    const dist = fitBox(1.02, 1.72, 0.68, 0.54, aspect, fov)
-    const yaw = lerp(-0.08, 0.22, orbit)
+    // Bust is ~1.2 wide and 2.0 tall. Portrait height fill is 70%; width stays inside the frame.
+    const dist = fitBox(1.35, 2.08, 0.95, 0.58, aspect, fov)
+    const yaw = lerp(-0.02, 0.05, orbit)
     const dir: [number, number, number] = [
       FOX_DIR[0] * Math.cos(yaw) - FOX_DIR[2] * Math.sin(yaw),
       FOX_DIR[1] + orbit * 0.04,
@@ -533,6 +540,77 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
   camera.up.copy(up)
   camera.position.copy(pos)
   camera.lookAt(target)
+}
+
+function objectScreenBounds(object: Object3D | null, camera: PerspectiveCamera, probe: Vector3) {
+  if (!object) return null
+  object.updateWorldMatrix(true, true)
+  const box = new Box3().setFromObject(object)
+  if (box.isEmpty()) return null
+  let minX = 1
+  let maxX = -1
+  let minY = 1
+  let maxY = -1
+  for (const x of [box.min.x, box.max.x]) {
+    for (const y of [box.min.y, box.max.y]) {
+      for (const z of [box.min.z, box.max.z]) {
+        probe.set(x, y, z).project(camera)
+        minX = Math.min(minX, probe.x)
+        maxX = Math.max(maxX, probe.x)
+        minY = Math.min(minY, probe.y)
+        maxY = Math.max(maxY, probe.y)
+      }
+    }
+  }
+  return {
+    width: Math.round(((maxX - minX) / 2) * 1000) / 1000,
+    height: Math.round(((maxY - minY) / 2) * 1000) / 1000,
+    left: Math.round(((minX + 1) / 2) * 1000) / 1000,
+    right: Math.round(((maxX + 1) / 2) * 1000) / 1000,
+    bottom: Math.round(((minY + 1) / 2) * 1000) / 1000,
+    top: Math.round(((maxY + 1) / 2) * 1000) / 1000,
+  }
+}
+
+function brickScreenBounds(igloo: Igloo | null, camera: PerspectiveCamera, probe: Vector3) {
+  if (!igloo) return null
+  const box = new Box3()
+  const piece = new Box3()
+  let any = false
+  igloo.group.updateWorldMatrix(true, true)
+  igloo.group.traverse((object) => {
+    if (!(object instanceof Mesh)) return
+    if (!object.geometry.getAttribute('aSeed')) return
+    piece.setFromObject(object)
+    if (!any) {
+      box.copy(piece)
+      any = true
+    } else box.union(piece)
+  })
+  if (!any) return null
+  let minX = 1
+  let maxX = -1
+  let minY = 1
+  let maxY = -1
+  for (const x of [box.min.x, box.max.x]) {
+    for (const y of [box.min.y, box.max.y]) {
+      for (const z of [box.min.z, box.max.z]) {
+        probe.set(x, y, z).project(camera)
+        minX = Math.min(minX, probe.x)
+        maxX = Math.max(maxX, probe.x)
+        minY = Math.min(minY, probe.y)
+        maxY = Math.max(maxY, probe.y)
+      }
+    }
+  }
+  return {
+    width: Math.round(((maxX - minX) / 2) * 1000) / 1000,
+    height: Math.round(((maxY - minY) / 2) * 1000) / 1000,
+    left: Math.round(((minX + 1) / 2) * 1000) / 1000,
+    right: Math.round(((maxX + 1) / 2) * 1000) / 1000,
+    bottom: Math.round(((minY + 1) / 2) * 1000) / 1000,
+    top: Math.round(((maxY + 1) / 2) * 1000) / 1000,
+  }
 }
 
 function fitBox(width: number, height: number, fillW: number, fillH: number, aspect: number, fovDeg: number) {
@@ -564,8 +642,9 @@ function applyGrade(
   let intensity = 0.08 + burst * 0.28
   let threshold = 0.97
   if (phase.screen === 'field') {
-    intensity = 0.06 + phase.solid * 0.5 + burst * 0.38
-    threshold = 0.9
+    // The baked crown is already bright. Keep bloom on the entrance spill, not the slabs.
+    intensity = 0.04 + phase.solid * 0.16 + burst * 0.34
+    threshold = 0.84
   }
   const toneBlend = phase.screen === 'field' ? BlendFunction.SKIP : BlendFunction.SRC
   if (tone.blendMode.blendFunction !== toneBlend) tone.blendMode.blendFunction = toneBlend
@@ -639,16 +718,18 @@ function addLights(scene: Scene, shadows: boolean) {
   if (shadows) {
     key.castShadow = true
     key.shadow.mapSize.set(2048, 2048)
-    key.shadow.radius = 2.5
+    key.shadow.radius = 4
     const shadow = key.shadow.camera
-    shadow.near = 2
-    shadow.far = 36
-    shadow.left = -10
-    shadow.right = 10
-    shadow.top = 10
-    shadow.bottom = -10
-    key.shadow.bias = -0.0004
-    key.shadow.normalBias = 0.03
+    shadow.near = 0.5
+    shadow.far = 42
+    shadow.left = -16
+    shadow.right = 16
+    shadow.top = 16
+    shadow.bottom = -16
+    shadow.updateProjectionMatrix()
+    // Grazing snow was picking up acne as horizontal bands. Bias lifts the receiver off the occluder.
+    key.shadow.bias = -0.0016
+    key.shadow.normalBias = 0.085
   }
   const fill = new DirectionalLight('#c5d0da', 0.16)
   fill.position.set(7.5, 3.2, 6)

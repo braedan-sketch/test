@@ -198,7 +198,7 @@ function prepareBakedMaterial(root: Object3D, uniforms: BlockUniforms) {
   material.toneMapped = false
   if (material.map) material.map.colorSpace = SRGBColorSpace
   material.fog = true
-  material.customProgramCacheKey = () => 'blendy-baked-igloo-v1'
+  material.customProgramCacheKey = () => 'blendy-baked-igloo-v2'
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uSolid = uniforms.uSolid
     shader.uniforms.uDissolve = uniforms.uDissolve
@@ -226,7 +226,14 @@ function prepareBakedMaterial(root: Object3D, uniforms: BlockUniforms) {
         '#include <color_fragment>',
         `#include <color_fragment>
         if (uSolid < 0.999 && vSeed > uSolid) discard;
-        if (uDissolve > 0.001 && vSeed < uDissolve) discard;`,
+        if (uDissolve > 0.001 && vSeed < uDissolve) discard;
+        float luma = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+        float knee = 0.56;
+        if (luma > knee) {
+          float over = luma - knee;
+          float compressed = knee + over / (1.0 + over * 4.8);
+          diffuseColor.rgb *= compressed / luma;
+        }`,
       )
   }
   return material
