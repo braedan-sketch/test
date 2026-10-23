@@ -24,16 +24,14 @@ import {
   PerspectiveCamera,
   PMREMGenerator,
   Scene,
-  ShaderMaterial,
-  SphereGeometry,
   SRGBColorSpace,
   Vector2,
   Vector3,
   WebGLRenderer,
   HalfFloatType,
-  BackSide,
   Color,
 } from 'three'
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { brand, type ScreenId } from './brand'
 import { createFigure } from './figure'
 import { loadIgloo, makeLabelSlots, type Igloo, type LabelAnchor } from './igloo'
@@ -62,8 +60,8 @@ declare global {
 const DOME_TARGET: readonly [number, number, number] = [0.05, 2.15, 0.12]
 const DOME_DIR: readonly [number, number, number] = [0.1, 1, 0.26]
 // Eye-level center of the stone dome, camera in front and slightly above.
-const EYE_TARGET: readonly [number, number, number] = [0.18, 1.42, 0.08]
-const EYE_DIR: readonly [number, number, number] = [0.55, 0.28, 1.5]
+const EYE_TARGET: readonly [number, number, number] = [0.1, 3.15, 0.04]
+const EYE_DIR: readonly [number, number, number] = [0.48, 0.34, 1.55]
 const CRYSTAL_DIR: readonly [number, number, number] = [0.22, 0.04, 1]
 // Seated fox: hips on the ring, head near y 1.3, tail off to +X.
 const FOX_TARGET: readonly [number, number, number] = [0.04, 0.82, 0.12]
@@ -146,12 +144,13 @@ export async function startExperience(overlay: Overlay) {
     composer.addPass(normalPass)
     composer.addPass(new EffectPass(camera, ssao))
   }
+  const tone = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC })
   composer.addPass(new EffectPass(camera, bloom))
   composer.addPass(new EffectPass(camera, warp))
   composer.addPass(new EffectPass(camera, chromatic))
   if (smaa) composer.addPass(new EffectPass(camera, smaa))
   composer.addPass(
-    new EffectPass(camera, noise, vignette, new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC })),
+    new EffectPass(camera, noise, vignette, tone),
   )
 
   let dpr = Math.min(window.devicePixelRatio || 1, quality.dprCap)
@@ -289,7 +288,7 @@ export async function startExperience(overlay: Overlay) {
       clear.copy(world.fog.color)
       renderer.setClearColor(clear, 1)
       scene.environmentIntensity =
-        phase.screen === 'field' || phase.screen === 'rift' ? 0.32 : phase.screen === 'meteor' ? 0.7 : 0.45
+        phase.screen === 'field' || phase.screen === 'rift' ? 0.28 : phase.screen === 'meteor' ? 1.15 : 0.85
 
       igloo?.update(phase.burst, phase.solid, phase.dissolve, reducedMotion ? 0 : now / 1000)
       meteor.update(phase.meteorReveal)
@@ -297,7 +296,7 @@ export async function startExperience(overlay: Overlay) {
       figure.update(phase.figureAppear, phase.figureBlow, reducedMotion ? 0 : now / 1000, dpr)
 
       applyCamera(phase, pos, target, up, camera)
-      applyGrade(phase, bloom, chromatic, warp, camera.aspect)
+      applyGrade(phase, bloom, chromatic, warp, tone, camera.aspect)
       overlay.setFlash(phase.flash * 0.35)
       overlay.setUiDim(phase.screen === 'rings' ? 1 : 1 - phase.burst * 0.04)
       overlay.setScrollProgress(global)
@@ -481,20 +480,20 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     const dHigh = fitBox(5.15, 4.55, 0.34, 0.72, aspect, fov)
     // Box grows with the drift so the solid dome and the opened dome both land near 75% width.
     const span = phase.burst
-    const dEye = fitBox(lerp(5.2, 5.55, span), lerp(3.55, 3.75, span), 0.74, 0.46, aspect, fov)
+    const dEye = fitBox(lerp(5.15, 5.4, span), lerp(3.45, 3.65, span), 0.7, 0.48, aspect, fov)
     placeAlong(scratchA, DOME_TARGET, DOME_DIR, dHigh)
     placeAlong(scratchB, EYE_TARGET, EYE_DIR, dEye)
     pos.copy(scratchA).lerp(scratchB, dolly)
   } else if (phase.screen === 'rift') {
     fov = 36
     const crystalTarget: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
-    placeAlong(scratchA, EYE_TARGET, EYE_DIR, fitBox(5.55, 3.75, 0.74, 0.46, aspect, 40))
-    placeAlong(scratchB, crystalTarget, CRYSTAL_DIR, fitBox(1.9, 2.55, 0.61, 0.58, aspect, fov))
+    placeAlong(scratchA, EYE_TARGET, EYE_DIR, fitBox(5.4, 3.65, 0.7, 0.48, aspect, 40))
+    placeAlong(scratchB, crystalTarget, CRYSTAL_DIR, fitBox(1.9, 2.55, 0.78, 0.7, aspect, fov))
     mix3(target, EYE_TARGET, crystalTarget, smoother(phase.riftT))
     pos.copy(scratchA).lerp(scratchB, smoother(phase.riftT))
   } else if (phase.screen === 'meteor') {
     fov = 34
-    const hold = fitBox(1.9, 2.55, 0.61, 0.58, aspect, fov)
+    const hold = fitBox(1.9, 2.55, 0.78, 0.7, aspect, fov)
     const push = smoother(clamp((phase.meteorT - 0.62) / 0.38, 0, 1))
     const dist = lerp(hold, -0.35, push)
     target.set(meteorCenter.x, meteorCenter.y, meteorCenter.z)
@@ -558,15 +557,18 @@ function applyGrade(
   bloom: BloomEffect,
   chromatic: ChromaticAberrationEffect,
   warp: WarpEffect,
+  tone: ToneMappingEffect,
   aspect: number,
 ) {
   const burst = phase.screen === 'field' ? phase.burst : 0
   let intensity = 0.08 + burst * 0.28
   let threshold = 0.97
-  if (phase.screen === 'field' && phase.solid < 0.55) {
-    intensity = 0.08
-    threshold = 0.96
+  if (phase.screen === 'field') {
+    intensity = 0.06 + phase.solid * 0.5 + burst * 0.38
+    threshold = 0.9
   }
+  const toneBlend = phase.screen === 'field' ? BlendFunction.SKIP : BlendFunction.SRC
+  if (tone.blendMode.blendFunction !== toneBlend) tone.blendMode.blendFunction = toneBlend
   if (phase.screen === 'rings') {
     intensity = 0.55
     threshold = 0.88
@@ -654,37 +656,23 @@ function addLights(scene: Scene, shadows: boolean) {
 }
 
 function createEnvironment(renderer: WebGLRenderer) {
-  const envScene = new Scene()
-  const material = new ShaderMaterial({
-    side: BackSide,
-    depthWrite: false,
-    vertexShader: /* glsl */ `
-      varying vec3 vDir;
-      void main() {
-        vDir = position;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      varying vec3 vDir;
-      void main() {
-        vec3 direction = normalize(vDir);
-        float height = direction.y;
-        vec3 ground = vec3(0.18, 0.2, 0.22);
-        vec3 horizon = vec3(0.42, 0.46, 0.5);
-        vec3 zenith = vec3(0.28, 0.32, 0.38);
-        vec3 color = mix(ground, horizon, smoothstep(-0.35, 0.08, height));
-        color = mix(color, zenith, smoothstep(0.05, 0.7, height));
-        float sun = pow(max(dot(direction, normalize(vec3(-0.2, 0.86, 0.25))), 0.0), 18.0);
-        color += vec3(0.92, 0.95, 1.0) * sun * 0.28;
-        gl_FragColor = vec4(color, 1.0);
-      }
-    `,
+  const room = new RoomEnvironment()
+  room.traverse((object) => {
+    if (!(object instanceof Mesh) || !object.material) return
+    const materials = Array.isArray(object.material) ? object.material : [object.material]
+    for (const material of materials) {
+      if ('color' in material && material.color instanceof Color) material.color.lerp(new Color('#c9d7e6'), 0.4)
+    }
   })
-  envScene.add(new Mesh(new SphereGeometry(8, 32, 16), material))
   const pmrem = new PMREMGenerator(renderer)
-  const texture = pmrem.fromScene(envScene, 0.04).texture
+  const texture = pmrem.fromScene(room, 0.04).texture
   pmrem.dispose()
-  material.dispose()
+  room.traverse((object) => {
+    if (object instanceof Mesh) {
+      object.geometry.dispose()
+      const materials = Array.isArray(object.material) ? object.material : [object.material]
+      for (const material of materials) material.dispose()
+    }
+  })
   return texture
 }

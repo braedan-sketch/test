@@ -177,6 +177,12 @@ export async function createMeteor(quality: Quality): Promise<Meteor> {
   const hero = await loadHero('/models/crystal.glb')
   if (hero) {
     crystal.visible = false
+    hero.traverse((object) => {
+      const mesh = object as Mesh
+      if (!mesh.isMesh || !mesh.material || !('envMapIntensity' in mesh.material)) return
+      mesh.material.envMapIntensity = 1.35
+      if (!quality.crystalTransmission && 'transmission' in mesh.material) mesh.material.transmission = 0
+    })
     fitHero(hero, 2.5)
     group.add(hero)
     anchors = boxAnchors(hero)

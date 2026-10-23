@@ -177,6 +177,61 @@ function asMesh(object: Object3D): object is Mesh {
   return (object as Mesh).isMesh === true
 }
 
+async function isGlb(url: string) {
+  try {
+    const head = await fetch(url, { method: 'HEAD' })
+    const type = head.headers.get('content-type') ?? ''
+    return head.ok && !type.includes('text/html')
+  } catch {
+    return false
+  }
+}
+
+function prepareBakedMaterial(root: Object3D, uniforms: BlockUniforms) {
+  let source: MeshBasicMaterial | null = null
+  root.traverse((object) => {
+    if (!asMesh(object) || source) return
+    const current = object.material
+    if (current instanceof MeshBasicMaterial) source = current
+  })
+  const material = source ?? new MeshBasicMaterial({ color: '#c5ced6' })
+  material.toneMapped = false
+  if (material.map) material.map.colorSpace = SRGBColorSpace
+  material.fog = true
+  material.customProgramCacheKey = () => 'blendy-baked-igloo-v1'
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uSolid = uniforms.uSolid
+    shader.uniforms.uDissolve = uniforms.uDissolve
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        attribute float aSeed;
+        varying float vSeed;`,
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        vSeed = aSeed;`,
+      )
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying float vSeed;
+        uniform float uSolid;
+        uniform float uDissolve;`,
+      )
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        if (uSolid < 0.999 && vSeed > uSolid) discard;
+        if (uDissolve > 0.001 && vSeed < uDissolve) discard;`,
+      )
+  }
+  return material
+}
+
 export async function loadIgloo(
   quality: Quality,
   sampleHeight: (x: number, z: number) => number,
@@ -187,13 +242,23 @@ export async function loadIgloo(
   const loader = new GLTFLoader()
   loader.setDRACOLoader(draco)
 
-  const gltf = await loader.loadAsync('/models/igloo_bricks.glb', (event) => {
+  const baked = await isGlb('/models/igloo_bricks_baked.glb')
+  const gltf = await loader.loadAsync(baked ? '/models/igloo_bricks_baked.glb' : '/models/igloo_bricks.glb', (event) => {
     if (event.total > 0) onProgress(0.08 + (event.loaded / event.total) * 0.84)
   })
   draco.dispose()
   onProgress(0.96)
 
-  const { material, uniforms } = createBlockMaterial(quality)
+  const procedural = baked ? null : createBlockMaterial(quality)
+  const uniforms: BlockUniforms = procedural
+    ? procedural.uniforms
+    : {
+        uBurst: { value: 0 },
+        uSolid: { value: 0 },
+        uDissolve: { value: 0 },
+        uCenter: { value: new Vector3() },
+      }
+  const bakedMaterial = baked ? prepareBakedMaterial(gltf.scene, uniforms) : null
   const group = gltf.scene
   group.rotation.y = YAW
 
@@ -214,7 +279,7 @@ export async function loadIgloo(
     geometry.setAttribute('aSeed', new BufferAttribute(new Float32Array(count).fill(hash01(hash)), 1))
     geometry.setAttribute('aRow', new BufferAttribute(new Float32Array(count).fill(row), 1))
 
-    mesh.material = material
+    mesh.material = bakedMaterial ?? procedural!.material
     mesh.castShadow = quality.shadows
     mesh.receiveShadow = quality.shadows
     mesh.updateMatrix()
@@ -343,9 +408,46 @@ export async function loadIgloo(
     return { sprite, material: spriteMat, scale }
   })
 
-  const light = new PointLight('#f4f8ff', 2.2, 9, 1.6)
+  const light = new PointLight('#d5e6ff', 1.1, 6.5, 1.4)
   light.position.copy(core)
   group.add(light)
+
+  const tunnels = pieces.filter((piece) => piece.tunnel)
+  // Camera sits in +Z. Pick the tunnel piece that faces it, then step outside the mouth.
+  const towardCam = new Vector3(-0.12, 0, 1).normalize()
+  const mouth = new Vector3(0.2, 0.25, 1.8)
+  if (tunnels.length > 0) {
+    let best = -Infinity
+    for (const piece of tunnels) {
+      const score = piece.localCenter.dot(towardCam)
+      if (score > best) {
+        best = score
+        mouth.copy(piece.localCenter)
+      }
+    }
+  }
+  mouth.addScaledVector(towardCam, 1.05)
+  mouth.y = 0.16
+  const spill = new PointLight('#e7f1ff', 8, 9, 1.35)
+  spill.position.copy(mouth)
+  spill.castShadow = false
+  group.add(spill)
+  const spillSprite = new Sprite(
+    new SpriteMaterial({
+      map: glowMap ?? undefined,
+      transparent: true,
+      opacity: 0.55,
+      blending: AdditiveBlending,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false,
+      color: '#f7fbff',
+    }),
+  )
+  spillSprite.position.set(mouth.x, 0.06, mouth.z)
+  spillSprite.scale.set(4.8, 2.2, 1)
+  spillSprite.renderOrder = 2
+  group.add(spillSprite)
 
   const labelPieces = pickLabels(pieces)
   labelPieces.forEach((piece, index) => {
@@ -367,17 +469,21 @@ export async function loadIgloo(
       group.visible = dissolve < 0.985
       guides.visible = solid < 0.42 && dissolve < 0.2
 
-      const glow = burst * (1 - smoother(dissolve))
-      coreMat.uniforms.uGlow.value = glow
-      coreMesh.scale.setScalar(0.18 + glow * 0.28)
+      const open = burst * (1 - smoother(dissolve))
+      const presence = (1 - smoother(dissolve)) * solid
+      coreMat.uniforms.uGlow.value = (0.16 + open * 0.9) * presence
+      coreMesh.scale.setScalar(0.22 + open * 0.55)
       glowLayers.forEach((layer, index) => {
-        const weight = index === 0 ? 0.22 : index === 1 ? 0.08 : 0.03
-        layer.material.opacity = glow * weight
-        layer.material.toneMapped = true
-        layer.sprite.scale.setScalar(layer.scale * (0.35 + glow * 0.25))
+        const weight = index === 0 ? 0.16 : index === 1 ? 0.07 : 0.03
+        layer.material.opacity = (0.08 + open * 0.9) * weight * presence
+        layer.material.toneMapped = false
+        layer.sprite.scale.setScalar(layer.scale * (0.42 + open * 0.7))
       })
-      light.intensity = 0.25 + glow * 5.5
-      light.distance = 2.6 + glow * 1.4
+      light.intensity = (0.35 + open * 7.5) * presence
+      light.distance = 3.2 + open * 2.4
+      spill.intensity = (6.5 + open * 10) * presence
+      spill.distance = 8 + open * 2.5
+      ;(spillSprite.material as SpriteMaterial).opacity = (0.5 + open * 0.4) * presence
       ;(contact.material as MeshBasicMaterial).opacity = 0.78 * (1 - smoother(burst) * 0.45) * solid * (1 - dissolve)
 
       for (const piece of pieces) {

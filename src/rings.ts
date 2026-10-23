@@ -5,6 +5,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshPhysicalMaterial,
+  Object3D,
   PointLight,
   SphereGeometry,
   Sprite,
@@ -12,6 +13,7 @@ import {
   TorusGeometry,
   CanvasTexture,
   SRGBColorSpace,
+  Vector3,
 } from 'three'
 import { fitHero, loadHero } from './heroModel'
 import type { Quality } from './quality'
@@ -108,11 +110,41 @@ export async function createRings(quality: Quality): Promise<Rings> {
   }
 
   const hero = await loadHero('/models/rings.glb')
+  const rigs: RingRig[] = []
   if (hero) {
     for (const band of bands) band.group.visible = false
     core.visible = false
-    fitHero(hero, 4.8)
+    hero.traverse((object) => {
+      const mesh = object as Mesh
+      if (!mesh.isMesh || !mesh.material || !('envMapIntensity' in mesh.material)) return
+      mesh.material.envMapIntensity = 1.35
+      if ('emissive' in mesh.material && mesh.material.emissive instanceof Color && 'emissiveIntensity' in mesh.material) {
+        mesh.material.emissive.set('#d5e6f2')
+        mesh.material.emissiveIntensity = 0.22
+      }
+      if (!quality.blockTransmission && 'transmission' in mesh.material) mesh.material.transmission = 0
+    })
+    fitHero(hero, 4.6)
     root.add(hero)
+    const specs = [
+      { name: 'ring_outer', speed: 0.18 },
+      { name: 'ring_mid', speed: -0.34 },
+      { name: 'ring_inner', speed: 0.62 },
+    ]
+    for (const spec of specs) {
+      const pivot = hero.getObjectByName(spec.name)
+      if (!pivot) continue
+      rigs.push({
+        pivot,
+        speed: spec.speed,
+        segments: pivot.children.map((child) => {
+          const dir = child.position.clone()
+          dir.y = 0
+          if (dir.lengthSq() > 1e-4) dir.normalize()
+          return { object: child, base: child.position.clone(), dir }
+        }),
+      })
+    }
   }
 
   return {
@@ -121,7 +153,14 @@ export async function createRings(quality: Quality): Promise<Rings> {
       const visible = shown > 0.02
       root.visible = visible
       root.scale.setScalar(0.92 + shown * 0.08)
-      if (hero) hero.rotation.y = spin * Math.PI * 2 * 0.18
+      const gap = 0.035 + shown * 0.045
+      for (const rig of rigs) {
+        rig.pivot.rotation.y = spin * Math.PI * 2 * rig.speed
+        for (const segment of rig.segments) {
+          segment.object.position.copy(segment.base)
+          if (segment.dir.lengthSq() > 0.5) segment.object.position.addScaledVector(segment.dir, gap)
+        }
+      }
       for (const band of bands) {
         band.group.rotation.y = spin * Math.PI * 2 * band.speed
       }
@@ -129,4 +168,10 @@ export async function createRings(quality: Quality): Promise<Rings> {
       if (halo) halo.material.opacity = 0.22 + shown * 0.28
     },
   }
+}
+
+type RingRig = {
+  pivot: Object3D
+  speed: number
+  segments: Array<{ object: Object3D; base: Vector3; dir: Vector3 }>
 }

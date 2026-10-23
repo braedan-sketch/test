@@ -1,5 +1,7 @@
 import {
   AdditiveBlending,
+  Box3,
+  BufferAttribute,
   BufferGeometry,
   Float32BufferAttribute,
   Group,
@@ -10,7 +12,7 @@ import {
   ShaderMaterial,
   TorusGeometry,
 } from 'three'
-import { fitHero, loadHero } from './heroModel'
+import { loadHero } from './heroModel'
 import type { Quality } from './quality'
 
 export type Figure = {
@@ -95,8 +97,63 @@ export async function createFigure(quality: Quality): Promise<Figure> {
   const points = new Points(geometry, material)
   const root = new Group()
   root.add(points)
-  root.rotation.y = 0.28
   root.scale.setScalar(1)
+
+  const normalMaterial = new ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    fog: false,
+    blending: NormalBlending,
+    uniforms: {
+      uTime: { value: 0 },
+      uBlow: { value: 0 },
+      uAppear: { value: 0 },
+      uPixel: { value: 1 },
+    },
+    vertexShader: /* glsl */ `
+      attribute float aSeed;
+      uniform float uTime;
+      uniform float uBlow;
+      uniform float uAppear;
+      uniform float uPixel;
+      varying float vSeed;
+      varying float vShade;
+      varying float vAlpha;
+      void main() {
+        vSeed = aSeed;
+        float lambert = dot(normalize(normal), normalize(vec3(-0.35, 0.82, 0.4)));
+        float under = smoothstep(0.05, -0.75, normal.y);
+        vShade = clamp(mix(0.28 + 0.72 * lambert, 0.08, under), 0.0, 1.0);
+        float gate = smoothstep(aSeed * 0.45, aSeed * 0.45 + 0.22, uAppear);
+        vec3 p = position;
+        float s = sin(uTime * 1.15 + aSeed * 40.0);
+        p.x += s * 0.002;
+        p.y += cos(uTime * 0.9 + aSeed * 17.0) * 0.002;
+        float lift = uBlow * uBlow;
+        p.y += lift * (0.12 + aSeed * 2.4);
+        p.x += lift * (aSeed - 0.5) * 0.42;
+        p.z += lift * (fract(aSeed * 13.7) - 0.5) * 0.42;
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        gl_Position = projectionMatrix * mv;
+        gl_PointSize = clamp(uPixel * (4.6 / max(1.0, -mv.z)), 0.3, 1.55);
+        vAlpha = gate * (1.0 - smoothstep(0.35, 0.96, uBlow));
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying float vSeed;
+      varying float vShade;
+      varying float vAlpha;
+      void main() {
+        vec2 d = gl_PointCoord - vec2(0.5);
+        float r = length(d);
+        if (r > 0.5) discard;
+        float falloff = smoothstep(0.5, 0.12, r);
+        vec3 color = mix(vec3(0.10, 0.12, 0.14), vec3(0.94, 0.96, 0.98), vShade);
+        gl_FragColor = vec4(color, falloff * vAlpha * 0.72);
+      }
+    `,
+  })
+  let active = material
 
   const disc = new Mesh(
     new TorusGeometry(0.58, 0.009, 10, 96),
@@ -131,21 +188,34 @@ export async function createFigure(quality: Quality): Promise<Figure> {
   glow.position.y = 0.01
   root.add(disc, inner, glow)
 
-  const hero = await loadHero('/models/fox.glb')
-  if (hero) {
+  const cloud = await loadHero('/models/fox_points.glb')
+  const sampled = cloud?.getObjectByProperty('type', 'Points')
+  if (sampled instanceof Points && sampled.geometry.getAttribute('normal')) {
+    const source = quality.low ? thinPoints(sampled.geometry, quality.points) : sampled.geometry
+    if (source !== sampled.geometry) sampled.geometry = source
+    const count = source.getAttribute('position')?.count ?? 0
+    const seeds = new Float32Array(count)
+    for (let i = 0; i < count; i += 1) seeds[i] = hashUnit(i)
+    source.setAttribute('aSeed', new BufferAttribute(seeds, 1))
+    sampled.material = normalMaterial
+    sampled.scale.multiplyScalar(0.86)
     points.visible = false
-    fitHero(hero, 1.72, 'floor')
-    root.add(hero)
+    root.add(sampled)
+    root.updateWorldMatrix(true, true)
+    const box = new Box3().setFromObject(sampled)
+    sampled.position.y += 0.02 - box.min.y
+    active = normalMaterial
   }
+  root.rotation.y = 0.35
 
   return {
     group: root,
     update(appear, blow, time, pixelRatio) {
       root.visible = appear > 0.01 && blow < 0.995
-      material.uniforms.uAppear!.value = appear
-      material.uniforms.uBlow!.value = blow
-      material.uniforms.uTime!.value = time
-      material.uniforms.uPixel!.value = pixelRatio
+      active.uniforms.uAppear!.value = appear
+      active.uniforms.uBlow!.value = blow
+      active.uniforms.uTime!.value = time
+      active.uniforms.uPixel!.value = pixelRatio
       const shown = appear * (1 - Math.min(1, blow * 1.4))
       disc.visible = shown > 0.05
       inner.visible = shown > 0.05
@@ -312,6 +382,35 @@ function sampleSurface(surf: Surf, count: number, rand: () => number) {
     shades[n] = 0.08 + light * 0.92
   }
   return { positions, seeds, shades }
+}
+
+function hashUnit(index: number) {
+  const n = Math.sin(index * 127.1 + 311.7) * 43758.5453
+  return n - Math.floor(n)
+}
+
+function thinPoints(geometry: BufferGeometry, keep: number) {
+  const position = geometry.getAttribute('position')
+  const normal = geometry.getAttribute('normal')
+  if (!position || !normal) return geometry
+  const step = Math.max(1, Math.floor(position.count / Math.max(1, keep)))
+  const count = Math.ceil(position.count / step)
+  const nextPos = new Float32Array(count * 3)
+  const nextNrm = new Float32Array(count * 3)
+  let write = 0
+  for (let i = 0; i < position.count; i += step) {
+    nextPos[write * 3] = position.getX(i)
+    nextPos[write * 3 + 1] = position.getY(i)
+    nextPos[write * 3 + 2] = position.getZ(i)
+    nextNrm[write * 3] = normal.getX(i)
+    nextNrm[write * 3 + 1] = normal.getY(i)
+    nextNrm[write * 3 + 2] = normal.getZ(i)
+    write += 1
+  }
+  const thin = new BufferGeometry()
+  thin.setAttribute('position', new Float32BufferAttribute(nextPos, 3))
+  thin.setAttribute('normal', new Float32BufferAttribute(nextNrm, 3))
+  return thin
 }
 
 function mulberry(seed: number) {
