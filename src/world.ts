@@ -5,6 +5,9 @@ import {
   DataTexture,
   FogExp2,
   Float32BufferAttribute,
+  Group,
+  LineBasicMaterial,
+  LineSegments,
   LinearFilter,
   LinearMipmapLinearFilter,
   Mesh,
@@ -118,7 +121,7 @@ export function sampleHeight(x: number, z: number) {
 
 export type World = {
   fog: FogExp2
-  update: (time: number, mood: number) => void
+  update: (time: number, mood: number, wire?: number) => void
 }
 
 export function createWorld(scene: Scene, quality: Quality): World {
@@ -203,9 +206,9 @@ export function createWorld(scene: Scene, quality: Quality): World {
         diffuseColor.rgb *= 0.62 + grit * 0.85 + abs(grain) * fade * 0.45;
         float voidMix = smoothstep(0.4, 1.0, uMood) * (1.0 - smoothstep(1.15, 1.55, uMood));
         float ringsMix = smoothstep(1.35, 1.9, uMood) * (1.0 - smoothstep(2.05, 2.55, uMood));
-        vec2 cell = abs(fract(xz * 0.42) - 0.5);
-        float line = 1.0 - smoothstep(0.008, 0.028, min(cell.x, cell.y));
-        vec3 floorCol = vec3(0.045, 0.05, 0.055) + vec3(0.14, 0.16, 0.18) * line;
+        vec2 cell = abs(fract(xz * 0.55) - 0.5);
+        float line = 1.0 - smoothstep(0.012, 0.035, min(cell.x, cell.y));
+        vec3 floorCol = mix(vec3(0.58, 0.59, 0.61), vec3(0.32, 0.33, 0.35), line);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.03, 0.033, 0.038), voidMix);
         diffuseColor.rgb = mix(diffuseColor.rgb, floorCol, ringsMix);`,
       )
@@ -220,6 +223,9 @@ export function createWorld(scene: Scene, quality: Quality): World {
   terrain.frustumCulled = false
   scene.add(terrain)
 
+  const groundWire = buildGroundWire()
+  scene.add(groundWire.root)
+
   const snow = buildSnow(quality.snow)
   scene.add(snow.points)
 
@@ -228,15 +234,21 @@ export function createWorld(scene: Scene, quality: Quality): World {
 
   return {
     fog,
-    update(time, mood) {
+    update(time, mood, wire = 0) {
       const color = fogColor(mood)
       fog.color.copy(color)
-      fog.density = fogDensity(mood)
-      if (skyMat) skyMat.uniforms.uMood!.value = mood
+      fog.density = wire > 0.5 ? 0.001 : fogDensity(mood)
+      if (wire > 0.5) fog.color.set('#c5c8cc')
+      if (skyMat) {
+        skyMat.uniforms.uMood!.value = mood
+        skyMat.uniforms.uWire!.value = wire
+      }
       if (terrainMood) terrainMood.value = mood
-      // Field snow hides as the rift opens. Rings bring the same mesh back as a dark grid floor.
-      terrain.visible = mood < 0.45 || (mood > 1.2 && mood < 2.6)
-      snow.points.visible = mood < 0.85
+      // The snow field is the igloo ground. Rings and the crystal sit on the sky instead, so the mesh cannot cover them.
+      terrain.visible = mood < 0.45 && wire < 0.45
+      groundWire.root.visible = wire > 0.15
+      groundWire.setOpacity(Math.min(1, Math.max(0, (wire - 0.15) / 0.5)))
+      snow.points.visible = mood < 0.85 && wire < 0.4
       const attr = snow.points.geometry.getAttribute('position')
       if (attr && snow.points.visible) {
         for (let i = 0; i < snow.count; i += 1) {
@@ -336,7 +348,7 @@ function buildSky() {
     side: BackSide,
     depthWrite: false,
     fog: false,
-    uniforms: { uMood: { value: 0 } },
+    uniforms: { uMood: { value: 0 }, uWire: { value: 0 } },
     vertexShader: /* glsl */ `
       varying vec3 vDir;
       void main() {
@@ -347,6 +359,7 @@ function buildSky() {
     fragmentShader: /* glsl */ `
       varying vec3 vDir;
       uniform float uMood;
+      uniform float uWire;
       void main() {
         vec3 d = normalize(vDir);
         float h = d.y;
@@ -360,22 +373,30 @@ function buildSky() {
         float ridgeShade = 0.35 + 0.65 * sin(ang * 3.1 + 0.8);
         vec3 ridgeCol = mix(vec3(0.20, 0.23, 0.26), vec3(0.08, 0.09, 0.11), ridgeShade);
         field = mix(field, ridgeCol, peaks * (1.0 - smoothstep(0.12, 1.15, uMood)));
-        vec3 voidCol = vec3(0.07, 0.08, 0.10);
+        vec3 voidCol = vec3(0.58, 0.59, 0.61);
         float grid = 0.0;
-        if (uMood > 0.55 && uMood < 2.35) {
-          vec2 cell = abs(fract(vec2(atan(d.z, d.x) * 9.0, h * 16.0)) - 0.5);
-          grid = 1.0 - smoothstep(0.02, 0.055, min(cell.x, cell.y));
-          voidCol += vec3(0.028) * grid;
+        float dots = 0.0;
+        if (uMood > 0.45 && uMood < 1.7) {
+          vec2 gv = vec2(atan(d.z, d.x) * 18.0, h * 26.0);
+          vec2 cell = abs(fract(gv) - 0.5);
+          dots = 1.0 - smoothstep(0.06, 0.14, length(cell));
+          voidCol = mix(voidCol, vec3(0.28, 0.30, 0.33), dots * 0.85);
+        }
+        if (uMood > 1.15 && uMood < 2.4) {
+          vec2 cell = abs(fract(vec2(atan(d.z, d.x) * 10.0, h * 18.0)) - 0.5);
+          grid = 1.0 - smoothstep(0.015, 0.04, min(cell.x, cell.y));
         }
         float down = smoothstep(0.35, -0.9, h);
-        vec3 rings = mix(vec3(0.11, 0.12, 0.14), vec3(0.05, 0.055, 0.065), down);
-        rings += vec3(0.07) * grid;
-        vec3 figure = vec3(0.46, 0.49, 0.53);
+        vec3 rings = mix(vec3(0.62, 0.63, 0.65), vec3(0.50, 0.51, 0.53), down);
+        rings = mix(rings, vec3(0.34, 0.35, 0.37), grid * 0.65);
+        vec3 figure = vec3(0.20, 0.205, 0.215);
         vec3 color = field;
         float m = clamp(uMood, 0.0, 3.0);
         color = mix(color, voidCol, clamp(m, 0.0, 1.0));
         color = mix(color, rings, clamp(m - 1.0, 0.0, 1.0));
         color = mix(color, figure, clamp(m - 2.0, 0.0, 1.0));
+        vec3 paper = vec3(0.36, 0.37, 0.39);
+        color = mix(color, paper, clamp(uWire, 0.0, 1.0));
         gl_FragColor = vec4(color, 1.0);
       }
     `,
@@ -384,6 +405,74 @@ function buildSky() {
   sky.name = 'sky'
   sky.frustumCulled = false
   return sky
+}
+
+function buildGroundWire() {
+  const root = new Group()
+  const extent = 18
+  const step = 1.15
+  const ground: number[] = []
+  for (let i = -extent; i <= extent + 0.01; i += step) {
+    ground.push(-extent, 0.03, i, extent, 0.03, i)
+    ground.push(i, 0.03, -extent, i, 0.03, extent)
+  }
+  const groundMat = new LineBasicMaterial({
+    color: '#ffffff',
+    transparent: true,
+    opacity: 0.72,
+    fog: false,
+    toneMapped: false,
+  })
+  root.add(new LineSegments(new BufferGeometry().setAttribute('position', new Float32BufferAttribute(ground, 3)), groundMat))
+
+  const dots: number[] = []
+  for (let x = -extent; x <= extent + 0.01; x += step * 2) {
+    for (let z = -extent; z <= extent + 0.01; z += step * 2) {
+      dots.push(x, 0.05, z)
+    }
+  }
+  const dotMat = new PointsMaterial({
+    color: '#ffffff',
+    size: 2.4,
+    sizeAttenuation: false,
+    transparent: true,
+    opacity: 0.85,
+    fog: false,
+    toneMapped: false,
+  })
+  root.add(new Points(new BufferGeometry().setAttribute('position', new Float32BufferAttribute(dots, 3)), dotMat))
+
+  const air: number[] = []
+  for (const y of [4.6, 7.2]) {
+    const span = 14
+    const airStep = 4
+    for (let i = -span; i <= span + 0.01; i += airStep) {
+      air.push(-span, y, i, span, y, i)
+      air.push(i, y, -span, i, y, span)
+    }
+  }
+  for (let x = -12; x <= 12; x += 6) {
+    for (let z = -12; z <= 12; z += 6) {
+      air.push(x, 3.6, z, x, 8.2, z)
+    }
+  }
+  const airMat = new LineBasicMaterial({
+    color: '#ffffff',
+    transparent: true,
+    opacity: 0.22,
+    fog: false,
+    toneMapped: false,
+  })
+  root.add(new LineSegments(new BufferGeometry().setAttribute('position', new Float32BufferAttribute(air, 3)), airMat))
+  root.visible = false
+  return {
+    root,
+    setOpacity(amount: number) {
+      groundMat.opacity = 0.72 * amount
+      dotMat.opacity = 0.85 * amount
+      airMat.opacity = 0.22 * amount
+    },
+  }
 }
 
 function buildSnow(count: number) {

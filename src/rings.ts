@@ -104,7 +104,8 @@ export async function createRings(quality: Quality): Promise<Rings> {
           toneMapped: false,
         }),
       )
-      halo.scale.setScalar(2.4)
+      halo.scale.setScalar(1.15)
+      halo.position.y = 0.2
       root.add(halo)
     }
   }
@@ -116,16 +117,31 @@ export async function createRings(quality: Quality): Promise<Rings> {
     core.visible = false
     hero.traverse((object) => {
       const mesh = object as Mesh
-      if (!mesh.isMesh || !mesh.material || !('envMapIntensity' in mesh.material)) return
-      mesh.material.envMapIntensity = 1.35
-      if ('emissive' in mesh.material && mesh.material.emissive instanceof Color && 'emissiveIntensity' in mesh.material) {
-        mesh.material.emissive.set('#d5e6f2')
-        mesh.material.emissiveIntensity = 0.4
+      if (!mesh.isMesh || !mesh.material) return
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+      for (const material of materials) {
+        if (!('color' in material) || !(material.color instanceof Color)) continue
+        material.color.set('#ffffff')
+        if ('emissive' in material && material.emissive instanceof Color) material.emissive.set('#ffffff')
+        if ('emissiveIntensity' in material) material.emissiveIntensity = 1.6
+        if ('roughness' in material) material.roughness = 0.16
+        if ('metalness' in material) material.metalness = 0
+        if ('transmission' in material) material.transmission = 0
+        if ('transparent' in material) material.transparent = false
+        if ('opacity' in material) material.opacity = 1
+        if ('envMapIntensity' in material) material.envMapIntensity = 0.35
+        material.toneMapped = false
       }
-      if (!quality.blockTransmission && 'transmission' in mesh.material) mesh.material.transmission = 0
     })
     fitHero(hero, 4.6)
+    hero.position.y = 0.2
     root.add(hero)
+    const heart = new Mesh(
+      new SphereGeometry(0.16, 24, 16),
+      new MeshBasicMaterial({ color: '#ffffff', toneMapped: false }),
+    )
+    heart.position.y = 0.2
+    root.add(heart)
     const specs = [
       { name: 'ring_outer', speed: 0.18 },
       { name: 'ring_mid', speed: -0.34 },

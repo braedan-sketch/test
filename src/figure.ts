@@ -124,25 +124,30 @@ export async function createFigure(quality: Quality): Promise<Figure> {
       void main() {
         vSeed = aSeed;
       vec3 n = normalize(mat3(modelMatrix) * normal);
-      float ndl = dot(n, normalize(vec3(0.55, 0.7, -0.28)));
-      float wrap = clamp(ndl * 0.9 + 0.2, 0.0, 1.0);
-      float under = smoothstep(0.3, -0.5, n.y);
+      float ndl = dot(n, normalize(vec3(0.62, 0.52, -0.38)));
+      float under = smoothstep(0.2, -0.55, n.y);
+      float lit = smoothstep(-0.02, 0.38, ndl);
+      float shade = mix(lit, lit * 0.12, under);
       vec3 nView = normalize(mat3(normalMatrix) * normal);
-      float rim = pow(1.0 - clamp(abs(nView.z), 0.0, 1.0), 1.1);
-      vShade = clamp(max(mix(wrap, wrap * 0.42, under), rim), 0.0, 1.0);
+      float rim = pow(1.0 - clamp(abs(nView.z), 0.0, 1.0), 2.4);
+      vShade = clamp(shade + rim * 0.1, 0.0, 1.0);
         float gate = smoothstep(aSeed * 0.45, aSeed * 0.45 + 0.22, uAppear);
         vec3 p = position;
         float s = sin(uTime * 1.15 + aSeed * 40.0);
         p.x += s * 0.002;
         p.y += cos(uTime * 0.9 + aSeed * 17.0) * 0.002;
-        float lift = uBlow * uBlow;
-        p.y += lift * (0.12 + aSeed * 2.4);
-        p.x += lift * (aSeed - 0.5) * 0.42;
-        p.z += lift * (fract(aSeed * 13.7) - 0.5) * 0.42;
+        // A slice of the cloud leaves toward screen-upper-right. The rest of the bust stays put.
+        float depart = smoothstep(0.1, 0.5, uBlow);
+        float leave = depart * (1.0 - smoothstep(0.06, 0.38, aSeed));
+        float stream = leave * leave;
+        p.x += stream * (0.75 + (1.0 - aSeed) * 2.4);
+        p.y += stream * (0.65 + (1.0 - aSeed) * 2.8);
+        p.z += stream * (fract(aSeed * 13.7) - 0.5) * 0.85;
+        vShade = clamp(vShade + leave * 0.8, 0.0, 1.0);
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
         gl_Position = projectionMatrix * mv;
-        gl_PointSize = clamp(uPixel * (7.4 / max(1.0, -mv.z)), 1.05, 1.9);
-        vAlpha = gate * (1.0 - smoothstep(0.35, 0.96, uBlow));
+        gl_PointSize = clamp(uPixel * (8.2 / max(1.0, -mv.z)), 1.2, 2.15);
+        vAlpha = gate * (1.0 - smoothstep(0.78, 0.98, uBlow));
       }
     `,
     fragmentShader: /* glsl */ `
@@ -154,7 +159,7 @@ export async function createFigure(quality: Quality): Promise<Figure> {
         float r = length(d);
         if (r > 0.5) discard;
         float falloff = smoothstep(0.5, 0.12, r);
-        vec3 color = mix(vec3(0.16, 0.19, 0.24), vec3(0.97, 0.98, 1.0), vShade);
+        vec3 color = mix(vec3(0.015, 0.016, 0.02), vec3(1.0), vShade);
         gl_FragColor = vec4(color, falloff * vAlpha);
       }
     `,

@@ -59,8 +59,8 @@ declare global {
 }
 
 // Dome center after the group yaw and the ground lift. Overhead shot uses the footprint.
-const DOME_TARGET: readonly [number, number, number] = [0.05, 2.15, 0.12]
-const DOME_DIR: readonly [number, number, number] = [0.1, 1, 0.26]
+const DOME_TARGET: readonly [number, number, number] = [0.5, 2.15, 1.35]
+const DOME_DIR: readonly [number, number, number] = [0.04, 1, 0.07]
 // Dome center. Direction is about 6° down so the camera sits low and close.
 const EYE_TARGET: readonly [number, number, number] = [0.02, 3.05, 0.04]
 const EYE_DIR: readonly [number, number, number] = [0.42, 0.17, 1.5]
@@ -290,7 +290,8 @@ export async function startExperience(overlay: Overlay) {
       const marks = readMarks(maxScroll)
       const phase = readPhase(global, marks)
 
-      world.update(now / 1000, phase.mood)
+      const wire = phase.screen === 'field' ? 1 - smoother(phase.solid) : 0
+      world.update(now / 1000, phase.mood, wire)
       clear.copy(world.fog.color)
       renderer.setClearColor(clear, 1)
       scene.environmentIntensity =
@@ -476,14 +477,16 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
   let fov = 40
   if (phase.screen === 'field' || (phase.screen === 'rift' && phase.riftT < 0.02)) {
     fov = 40
-    const dolly = smoother(clamp(phase.fieldT / 0.18, 0, 1))
+    // Stay overhead through the wire hold. The eye pose is already fully in by the solid frame.
+    const dolly = smoother(clamp((phase.fieldT - 0.08) / 0.16, 0, 1))
     mix3(target, DOME_TARGET, EYE_TARGET, dolly)
     // Looking down the Y axis: world up is parallel to the view, which throws the dome into a corner.
     up.set(0, dolly, -(1 - dolly))
     if (up.lengthSq() < 1e-6) up.set(0, 1, 0)
     else up.normalize()
-    // Overhead dome is the ~5.1 footprint. fillH stays loose so width (35%) wins on both aspects.
-    const dHigh = fitBox(5.15, 4.55, 0.34, 0.72, aspect, fov)
+    // Wire dome, about half the frame width, on the ground grid.
+    const wireFillW = aspect < 1 ? 0.58 : 0.4
+    const dHigh = fitBox(4.2, 3.2, wireFillW, 0.85, aspect, fov)
     // Visual mass, not the inflated bounds. Portrait ~83% of the width, desktop ~50% of the height.
     const span = phase.burst
     const dEye = fitBox(lerp(4.15, 4.75, span), lerp(2.07, 2.7, span), 0.83, 0.5, aspect, fov)
@@ -494,12 +497,12 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     fov = 36
     const crystalTarget: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
     placeAlong(scratchA, EYE_TARGET, EYE_DIR, fitBox(4.75, 2.7, 0.83, 0.5, aspect, 40))
-    placeAlong(scratchB, crystalTarget, CRYSTAL_DIR, fitBox(1.9, 2.55, 0.9, 0.78, aspect, fov))
+    placeAlong(scratchB, crystalTarget, CRYSTAL_DIR, fitBox(1.9, 2.55, 0.54, 0.46, aspect, fov))
     mix3(target, EYE_TARGET, crystalTarget, smoother(phase.riftT))
     pos.copy(scratchA).lerp(scratchB, smoother(phase.riftT))
   } else if (phase.screen === 'meteor') {
     fov = 34
-    const hold = fitBox(1.9, 2.55, 0.9, 0.78, aspect, fov)
+    const hold = fitBox(1.9, 2.55, 0.54, 0.46, aspect, fov)
     const push = smoother(clamp((phase.meteorT - 0.62) / 0.38, 0, 1))
     const dist = lerp(hold, -0.35, push)
     target.set(meteorCenter.x, meteorCenter.y, meteorCenter.z)
@@ -510,19 +513,20 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     }
   } else if (phase.screen === 'rings') {
     fov = 36
-    const far = fitBox(4.6, 4.6, 0.72, 0.62, aspect, fov)
-    const near = fitBox(4.6, 4.6, 1.15, 0.92, aspect, fov)
+    const framed = fitBox(4.6, 4.6, 0.7, 0.85, aspect, fov)
+    const far = framed * 1.25
+    const near = framed * 0.6
     const y = lerp(far, near, smoother(phase.ringsT))
     const roll = phase.ringsT * 0.55
     pos.set(0, y, 0)
-    target.set(0, 0, 0)
+    target.set(0, 0.15, 0)
     up.set(Math.sin(roll), 0, Math.cos(roll))
   } else {
     fov = 34
     const orbit = clamp(phase.figureT / 0.7, 0, 1)
-    // Portrait wants ~83% of the height, desktop ~75%. Height wins on both.
-    const fillH = aspect < 1 ? 0.88 : 0.84
-    const fillW = aspect < 1 ? 1.15 : 0.62
+    // Bust about two thirds of the frame height, with room for the disc and the stream.
+    const fillH = 0.66
+    const fillW = aspect < 1 ? 0.92 : 0.55
     const dist = fitBox(1.18, 2.08, fillW, fillH, aspect, fov)
     const yaw = lerp(-0.02, 0.05, orbit)
     const dir: [number, number, number] = [
@@ -661,8 +665,9 @@ function applyGrade(
   bloom.intensity = intensity
   bloom.luminanceMaterial.threshold = threshold
   const figure = phase.screen === 'figure'
-  vignette.darkness = figure ? 0.5 : 0.22
-  vignette.offset = figure ? 0.28 : 0.42
+  const lightPaper = phase.screen === 'meteor' || phase.screen === 'rings' || (phase.screen === 'field' && phase.solid < 0.25)
+  vignette.darkness = figure ? 0.5 : lightPaper ? 0.05 : 0.22
+  vignette.offset = figure ? 0.4 : lightPaper ? 0.6 : 0.42
   const fringe = phase.chroma > 0.02 ? phase.chroma * 0.011 : 0
   chromatic.offset.set(fringe, fringe * 0.62)
   warp.setWarp(phase.ripple, phase.blur, phase.glitch, phase.white, phase.riftT + phase.figureT, aspect)

@@ -1,9 +1,13 @@
 import {
   AdditiveBlending,
   Box3,
+  BufferGeometry,
   CanvasTexture,
   Color,
+  Float32BufferAttribute,
   Group,
+  LineBasicMaterial,
+  LineSegments,
   IcosahedronGeometry,
   Mesh,
   MeshBasicMaterial,
@@ -18,6 +22,7 @@ import {
   Vector3,
 } from 'three'
 import { brand } from './brand'
+import { hash01 } from './math'
 import { fitHero, loadHero } from './heroModel'
 import type { LabelAnchor } from './igloo'
 import type { Quality } from './quality'
@@ -42,7 +47,7 @@ export type Meteor = {
 
 function buildDotField() {
   const mesh = new Mesh(
-    new PlaneGeometry(16, 22),
+    new PlaneGeometry(42, 56),
     new ShaderMaterial({
       depthWrite: false,
       uniforms: {},
@@ -56,17 +61,40 @@ function buildDotField() {
       fragmentShader: /* glsl */ `
         varying vec2 vUv;
         void main() {
-          vec2 cell = abs(fract(vUv * vec2(28.0, 40.0)) - 0.5);
-          float dot = 1.0 - smoothstep(0.08, 0.16, length(cell));
-          if (dot < 0.2) discard;
-          gl_FragColor = vec4(vec3(0.75, 0.78, 0.8), dot * 0.55);
+          vec2 cell = abs(fract(vUv * vec2(36.0, 48.0)) - 0.5);
+          float dot = 1.0 - smoothstep(0.07, 0.13, length(cell));
+          if (dot < 0.25) discard;
+          gl_FragColor = vec4(vec3(0.22, 0.24, 0.27), dot * 0.9);
         }
       `,
       transparent: true,
     }),
   )
-  mesh.position.set(0, 0.1, -4.2)
+  mesh.position.set(0, 0.2, -7.5)
   return mesh
+}
+
+function buildStreaks() {
+  const positions: number[] = []
+  for (let i = 0; i < 22; i += 1) {
+    const x = (hash01(i * 1.7) - 0.5) * 7.5
+    const y = (hash01(i * 2.9) - 0.35) * 6.2
+    const z = (hash01(i * 4.1) - 0.5) * 3.4
+    const len = 0.35 + hash01(i * 5.3) * 1.35
+    const dx = (hash01(i * 6.7) - 0.15) * len
+    const dy = (hash01(i * 8.1) - 0.55) * len
+    positions.push(x, y, z, x + dx, y + dy, z + (hash01(i * 9.4) - 0.5) * 0.25)
+  }
+  return new LineSegments(
+    new BufferGeometry().setAttribute('position', new Float32BufferAttribute(positions, 3)),
+    new LineBasicMaterial({
+      color: '#8e98a1',
+      transparent: true,
+      opacity: 0.55,
+      fog: false,
+      toneMapped: false,
+    }),
+  )
 }
 
 function fbm(x: number, y: number, z: number) {
@@ -139,7 +167,7 @@ export async function createMeteor(quality: Quality): Promise<Meteor> {
 
   const group = new Group()
   group.position.copy(CENTER)
-  group.add(crystal, buildDotField())
+  group.add(crystal, buildDotField(), buildStreaks())
 
   const core = new Mesh(
     new SphereGeometry(0.05, 16, 12),
