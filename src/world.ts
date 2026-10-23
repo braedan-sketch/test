@@ -407,28 +407,37 @@ function buildSky() {
   return sky
 }
 
+const WIRE_X = 0.55
+const WIRE_Z = 1.15
+
 function terrainHeight(x: number, z: number) {
-  return (
-    Math.sin(x * 0.18 + 0.4) * Math.cos(z * 0.15) * 0.62 +
-    Math.sin(x * 0.07 - z * 0.05) * 0.38 +
-    Math.cos(z * 0.31 + x * 0.04) * 0.2
-  )
+  const dx = x - WIRE_X
+  const dz = z - WIRE_Z
+  const r = Math.hypot(dx, dz)
+  // Shallow bowl under the dome, then hills that rise around it.
+  const bowl = -0.55 * Math.exp(-(r * r) / 7)
+  const hills =
+    Math.sin(x * 1.15 + 0.4) * Math.cos(z * 0.95 - 0.2) * 0.9 +
+    Math.sin(x * 0.52 - z * 0.4) * 0.62 +
+    Math.cos(z * 1.7 + x * 0.3) * 0.28
+  return hills + bowl
 }
 
 function edgeFade(x: number, z: number) {
-  const d = Math.hypot(x - 0.4, z - 1.1) / 11
-  const t = Math.min(1, Math.max(0, (d - 0.28) / 0.5))
-  return 1 - t * t * (3 - 2 * t)
+  const d = Math.hypot(x - WIRE_X, z - WIRE_Z)
+  const t = Math.min(1, Math.max(0, (d - 1.05) / 2.15))
+  const s = t * t * (3 - 2 * t)
+  return 1 - s
 }
 
 function buildGroundWire() {
   const root = new Group()
-  const size = 22
-  const plane = new PlaneGeometry(size, size, 22, 22)
+  const size = 12
+  const plane = new PlaneGeometry(size, size, 10, 10)
   plane.rotateX(-Math.PI / 2)
   const pos = plane.attributes.position
   if (!pos) throw new Error('Terrain is missing positions')
-  const origin = terrainHeight(0, 0)
+  const origin = terrainHeight(WIRE_X, WIRE_Z)
   for (let i = 0; i < pos.count; i += 1) {
     const x = pos.getX(i)
     const z = pos.getZ(i)
@@ -458,7 +467,7 @@ function buildGroundWire() {
       uniform float uOpacity;
       void main() {
         if (vFade < 0.02) discard;
-        gl_FragColor = vec4(vec3(0.95, 0.97, 0.98), vFade * uOpacity);
+        gl_FragColor = vec4(vec3(0.78, 0.8, 0.82), vFade * uOpacity);
       }
     `,
   })
@@ -467,8 +476,8 @@ function buildGroundWire() {
 
   const dots: number[] = []
   const dotFade: number[] = []
-  for (let x = -12; x <= 12; x += 2.2) {
-    for (let z = -12; z <= 12; z += 2.2) {
+  for (let x = -7; x <= 8; x += 1.8) {
+    for (let z = -6; z <= 8; z += 1.8) {
       const amount = edgeFade(x, z)
       if (amount < 0.2) continue
       dots.push(x, terrainHeight(x, z) - origin + 0.04, z)
@@ -506,18 +515,14 @@ function buildGroundWire() {
 
   const air: number[] = []
   const posts: Array<[number, number]> = [
-    [-3.2, 2.4],
-    [2.6, -1.8],
-    [4.4, 3.1],
-    [-1.5, -3.6],
-    [0.8, 4.8],
-    [-4.6, -0.6],
+    [WIRE_X - 2.4, WIRE_Z + 1.6],
+    [WIRE_X + 2.2, WIRE_Z - 1.4],
+    [WIRE_X + 1.2, WIRE_Z + 2.5],
   ]
   for (const [x, z] of posts) {
     const y = terrainHeight(x, z) - origin
-    air.push(x, y + 0.4, z, x, y + 3.4, z)
+    air.push(x, y + 0.15, z, x, y + 1.35, z)
   }
-  air.push(-2.2, 3.6, -1.4, 2.4, 4.1, 1.6, 1.2, 4.8, -2.2, 3.6, 5.2, 0.4)
   const airGeo = new BufferGeometry().setAttribute('position', new Float32BufferAttribute(air, 3))
   const airFade = new Float32Array(air.length / 3).fill(0.55)
   airGeo.setAttribute('aFade', new Float32BufferAttribute(airFade, 1))
@@ -526,14 +531,17 @@ function buildGroundWire() {
   root.add(new LineSegments(airGeo, airMat))
 
   const motes: number[] = []
-  for (let i = 0; i < 18; i += 1) {
-    const x = Math.sin(i * 2.3) * 5.5
-    const z = Math.cos(i * 1.7) * 4.8
-    const y = 2.2 + (i % 5) * 0.7
-    motes.push(x, y, z)
+  const moteFade: number[] = []
+  for (let i = 0; i < 10; i += 1) {
+    const x = WIRE_X + Math.sin(i * 2.3) * 3.2
+    const z = WIRE_Z + Math.cos(i * 1.7) * 2.8
+    const fade = edgeFade(x, z)
+    if (fade < 0.25) continue
+    motes.push(x, terrainHeight(x, z) - origin + 0.08, z)
+    moteFade.push(fade)
   }
   const moteGeo = new BufferGeometry().setAttribute('position', new Float32BufferAttribute(motes, 3))
-  moteGeo.setAttribute('aFade', new Float32BufferAttribute(new Float32Array(18).fill(0.8), 1))
+  moteGeo.setAttribute('aFade', new Float32BufferAttribute(moteFade, 1))
   const moteMat = dotMat.clone()
   moteMat.uniforms = { uOpacity: { value: 0.7 } }
   root.add(new Points(moteGeo, moteMat))

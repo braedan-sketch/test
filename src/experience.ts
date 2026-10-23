@@ -59,8 +59,8 @@ declare global {
 }
 
 // Dome center after the group yaw and the ground lift. Overhead shot uses the footprint.
-const DOME_TARGET: readonly [number, number, number] = [0.55, 1.7, 1.25]
-const DOME_DIR: readonly [number, number, number] = [0.62, 0.95, 1.05]
+const DOME_TARGET: readonly [number, number, number] = [0.55, 1.15, 1.15]
+const DOME_DIR: readonly [number, number, number] = [0.7, 0.86, 1.16]
 // Dome center. Direction is about 6° down so the camera sits low and close.
 const EYE_TARGET: readonly [number, number, number] = [0.02, 3.05, 0.04]
 const EYE_DIR: readonly [number, number, number] = [0.42, 0.17, 1.5]
@@ -481,21 +481,32 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     const dolly = smoother(clamp((phase.fieldT - 0.08) / 0.16, 0, 1))
     mix3(target, DOME_TARGET, EYE_TARGET, dolly)
     up.set(0, 1, 0)
-    const wireFillW = aspect < 1 ? 0.62 : 0.5
-    const dHigh = fitBox(4.6, 3.4, wireFillW, 0.55, aspect, fov)
-    // Visual mass, not the inflated bounds. Portrait ~83% of the width, desktop ~50% of the height.
+    const dHigh =
+      aspect < 1 ? fitBox(4.6, 3.4, 0.62, 0.55, aspect, fov) : fitBox(4.6, 3.4, 0.42, 0.5, aspect, fov)
+    // Portrait eye distance is locked. Desktop is scaled off that distance so the dome is ~37% of the width.
     const span = phase.burst
-    const dEye = fitBox(lerp(4.15, 4.75, span), lerp(2.07, 2.7, span), 0.83, 0.5, aspect, fov)
+    const eyeWidth = lerp(4.15, 4.75, span)
+    const eyeHeight = lerp(2.07, 2.7, span)
+    const dEye =
+      aspect >= 1
+        ? desktopEyeDistance(eyeWidth, eyeHeight, aspect, fov)
+        : fitBox(eyeWidth, eyeHeight, 0.83, 0.5, aspect, fov)
     placeAlong(scratchA, DOME_TARGET, DOME_DIR, dHigh)
     placeAlong(scratchB, EYE_TARGET, EYE_DIR, dEye)
     pos.copy(scratchA).lerp(scratchB, dolly)
+    // Look beside the dome so it sits in the centre-right third. Portrait is unchanged.
+    if (aspect >= 1) aimSubjectRight(target, pos, 0.16 * dolly, aspect, fov)
   } else if (phase.screen === 'rift') {
     fov = 36
     const crystalTarget: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
-    placeAlong(scratchA, EYE_TARGET, EYE_DIR, fitBox(4.75, 2.7, 0.83, 0.5, aspect, 40))
+    const riftEye =
+      aspect >= 1 ? desktopEyeDistance(4.75, 2.7, aspect, 40) : fitBox(4.75, 2.7, 0.83, 0.5, aspect, 40)
+    placeAlong(scratchA, EYE_TARGET, EYE_DIR, riftEye)
     placeAlong(scratchB, crystalTarget, CRYSTAL_DIR, fitBox(1.9, 2.55, 0.54, 0.46, aspect, fov))
-    mix3(target, EYE_TARGET, crystalTarget, smoother(phase.riftT))
-    pos.copy(scratchA).lerp(scratchB, smoother(phase.riftT))
+    const riftBlend = smoother(phase.riftT)
+    mix3(target, EYE_TARGET, crystalTarget, riftBlend)
+    pos.copy(scratchA).lerp(scratchB, riftBlend)
+    if (aspect >= 1) aimSubjectRight(target, pos, 0.16 * (1 - riftBlend), aspect, 40)
   } else if (phase.screen === 'meteor') {
     fov = 34
     const hold = fitBox(1.9, 2.55, 0.54, 0.46, aspect, fov)
@@ -612,6 +623,30 @@ function brickScreenBounds(igloo: Igloo | null, camera: PerspectiveCamera, probe
     bottom: Math.round(((minY + 1) / 2) * 1000) / 1000,
     top: Math.round(((maxY + 1) / 2) * 1000) / 1000,
   }
+}
+
+function desktopEyeDistance(width: number, height: number, aspect: number, fovDeg: number) {
+  const portraitAspect = 390 / 844
+  const portrait = fitBox(width, height, 0.83, 0.5, portraitAspect, fovDeg)
+  const vHalf = (fovDeg * Math.PI) / 360
+  const tanPortrait = Math.tan(vHalf) * portraitAspect
+  const tanDesktop = Math.tan(vHalf) * aspect
+  return portrait * (tanPortrait / tanDesktop) * (0.83 / 0.375)
+}
+
+function aimSubjectRight(look: Vector3, pos: Vector3, fraction: number, aspect: number, fovDeg: number) {
+  if (fraction <= 0) return
+  const vHalf = (fovDeg * Math.PI) / 360
+  const tanH = Math.tan(vHalf) * aspect
+  const dx = look.x - pos.x
+  const dz = look.z - pos.z
+  const len = Math.hypot(dx, dz) || 1
+  const shift = len * tanH * 2 * fraction
+  // Screen-right. Sliding the aim the other way parks the subject on the right.
+  const rx = -dz / len
+  const rz = dx / len
+  look.x -= rx * shift
+  look.z -= rz * shift
 }
 
 function fitBox(width: number, height: number, fillW: number, fillH: number, aspect: number, fovDeg: number) {

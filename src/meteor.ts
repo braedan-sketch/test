@@ -216,13 +216,14 @@ export async function createMeteor(quality: Quality): Promise<Meteor> {
       const maps = source as { normalMap?: Texture | null; roughnessMap?: Texture | null }
       const normalMap = maps.normalMap ?? null
       const roughnessMap = maps.roughnessMap ?? null
+      chipShard(mesh.geometry)
       mesh.material = createGlassMaterial({
         normalMap: normalMap ?? null,
         roughnessMap: roughnessMap ?? null,
         kind: 'crystal',
       })
     })
-    fitHero(hero, 2.5)
+    fitHero(hero, 2.15)
     hero.rotation.y = 0.55
     group.add(hero)
     anchors = boxAnchors(hero)
@@ -256,6 +257,40 @@ export async function createMeteor(quality: Quality): Promise<Meteor> {
       }
     },
   }
+}
+
+function cellHash(ix: number, iy: number, iz: number) {
+  const n = Math.sin(ix * 127.1 + iy * 311.7 + iz * 74.7) * 43758.5453
+  return n - Math.floor(n)
+}
+
+// Break the clean prism into a chunky shard. Cells move together so each chip stays planar.
+function chipShard(geometry: BufferGeometry) {
+  const position = geometry.getAttribute('position')
+  const normal = geometry.getAttribute('normal')
+  if (!position || !normal) return
+  for (let i = 0; i < position.count; i += 1) {
+    const x = position.getX(i)
+    const y = position.getY(i)
+    const z = position.getZ(i)
+    const ix = Math.floor(x * 7.5)
+    const iy = Math.floor(y * 6.2)
+    const iz = Math.floor(z * 7.5)
+    const h = cellHash(ix, iy, iz)
+    const h2 = cellHash(ix + 5, iy + 13, iz + 2)
+    const h3 = cellHash(iy + 1, iz + 7, ix + 9)
+    const bite = h > 0.82 ? 0.1 + (h - 0.82) * 0.45 : (h - 0.5) * 0.09
+    const nx = normal.getX(i)
+    const ny = normal.getY(i)
+    const nz = normal.getZ(i)
+    position.setXYZ(
+      i,
+      x + nx * bite + (h2 - 0.5) * 0.03,
+      y + ny * bite + (h3 - 0.5) * 0.025,
+      z + nz * bite + (h2 - h3) * 0.02,
+    )
+  }
+  position.needsUpdate = true
 }
 
 function boxAnchors(root: Group) {
