@@ -92,7 +92,6 @@ export function createGlassMaterial(options: {
         uNormalScale: { value: 0.85 },
         uAbsorb: { value: new Color('#1a2836') },
         uCore: { value: new Color('#d7e6f2') },
-        uFilm: { value: 0.9 },
         uIor: { value: 1.4 },
       },
       vertexShader: ringsVertex,
@@ -140,7 +139,6 @@ const ringsFragment = /* glsl */ `
       uniform float uNormalScale;
       uniform vec3 uAbsorb;
       uniform vec3 uCore;
-      uniform float uFilm;
       uniform float uIor;
       varying vec3 vWorld;
       varying vec3 vNormal;
@@ -213,21 +211,17 @@ const ringsFragment = /* glsl */ `
         float spec = pow(max(dot(reflect(-key, n), v), 0.0), gloss);
         float spec2 = pow(max(dot(reflect(-rimLight, n), v), 0.0), 48.0);
 
-        float film = ndv * 6.5 + n.y * 2.2 + n.x * 1.4;
-        vec3 rainbow = 0.5 + 0.5 * cos(vec3(0.0, 2.09, 4.18) + film);
-        // Grazing rainbow changes within a pixel and aliases into a jagged rim.
-        float fringeAa = 1.0 - smoothstep(0.08, 0.55, fwidth(fresnel) + fwidth(film) * 0.15);
-        vec3 fringe = mix(vec3(1.0), rainbow, uFilm * fringeAa);
-
-        vec3 body = mix(uAbsorb, uAbsorb * 2.4 + uCore * 0.18, ndv);
-        vec3 color = body;
-        color += refracted * mix(0.22, 0.55, ndv) * fringe;
-        color = mix(color, reflected * (0.55 + 0.45 * fringe), fresnel * 0.92);
-        color += uCore * (0.08 + ndv * 0.12) * uFilm;
-        color += spec * vec3(1.15, 1.12, 1.05);
-        color += spec2 * vec3(0.45, 0.62, 0.85) * (0.35 + fresnel);
-        color += rainbow * fresnel * uFilm * 0.55 * fringeAa;
-        gl_FragColor = vec4(clamp(color, 0.0, 3.0), 1.0);
+        float wear = fract(sin(dot(vWorld.xyz, vec3(19.7, 43.1, 7.3))) * 12543.2);
+        float chip = smoothstep(0.82, 0.97, wear);
+        vec3 stone = mix(vec3(0.38, 0.42, 0.46), vec3(0.62, 0.66, 0.70), ndv);
+        stone *= mix(0.84, 1.0, wear);
+        stone = mix(stone, stone * 0.62, chip * 0.65);
+        vec3 color = stone;
+        color = mix(color, reflected * 0.28, fresnel * 0.22);
+        color += spec * vec3(0.85, 0.9, 0.96) * 0.28;
+        color += spec2 * vec3(0.55, 0.64, 0.72) * 0.12;
+        color += vec3(0.7, 0.82, 0.92) * pow(fresnel, 3.2) * 0.18;
+        gl_FragColor = vec4(clamp(color, 0.0, 2.0), 1.0);
       }
 `
 
@@ -332,18 +326,12 @@ const crystalFragment = /* glsl */ `
     float gloss = mix(24.0, 120.0, 1.0 - rough * 0.55);
     float spec = pow(max(dot(reflect(-key, n), v), 0.0), gloss);
 
-    float film = ndv * 11.0 + n.y * 2.4;
-    vec3 rainbow = 0.5 + 0.5 * cos(vec3(0.0, 2.094, 4.189) + film);
-    vec3 fringe = mix(vec3(dot(rainbow, vec3(0.333))), rainbow, 0.22);
-    float grazing = smoothstep(0.55, 0.95, fresnel);
-
     float keyNd = clamp(dot(n, key), 0.0, 1.0);
     vec3 body = mix(uAbsorb, uCore, pow(keyNd, 0.6));
     vec3 color = body;
     color += refracted * keyNd * 0.05;
     color += reflected * fresnel * 0.2;
-    color += spec * vec3(1.05, 1.1, 1.16);
-    color += fringe * grazing * 0.06;
+    color += spec * vec3(0.9, 0.94, 0.98) * 0.55;
     float mx = max(color.r, max(color.g, color.b));
     float mn = min(color.r, min(color.g, color.b));
     float sat = (mx - mn) / max(mx, 0.0001);

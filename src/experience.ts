@@ -2,6 +2,7 @@ import Lenis from 'lenis'
 import {
   BloomEffect,
   ChromaticAberrationEffect,
+  DepthOfFieldEffect,
   EffectComposer,
   EffectPass,
   NoiseEffect,
@@ -36,6 +37,7 @@ import {
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { brand, type ScreenId } from './brand'
 import { createFigure } from './figure'
+import { FrostEffect } from './frost'
 import { loadIgloo, makeLabelSlots, type Igloo, type LabelAnchor } from './igloo'
 import { clamp, lerp, smoother } from './math'
 import { createMeteor, meteorCenter, type Meteor } from './meteor'
@@ -123,19 +125,27 @@ export async function startExperience(overlay: Overlay) {
     radius: 0.45,
   })
   const chromatic = new ChromaticAberrationEffect({
-    offset: new Vector2(0.0004, 0.0002),
+    offset: new Vector2(0.0011, 0.0006),
     radialModulation: true,
-    modulationOffset: 0.12,
+    modulationOffset: 0.48,
+  })
+  const softGpu = softwareGpu(renderer)
+  const dof = new DepthOfFieldEffect(camera, {
+    focusDistance: 8,
+    focusRange: 2.6,
+    bokehScale: quality.low ? 0.5 : softGpu ? 0.85 : 2,
+    resolutionScale: quality.low || softGpu ? 0.2 : 0.5,
   })
   const warp = new WarpEffect()
   const noise = new NoiseEffect({
     blendFunction: BlendFunction.OVERLAY,
     premultiply: true,
   })
-  noise.blendMode.setOpacity(0.045)
-  const vignette = new VignetteEffect({ darkness: 0.22, offset: 0.42 })
+  noise.blendMode.setOpacity(0.07)
+  const vignette = new VignetteEffect({ darkness: 0.32, offset: 0.38 })
+  const frost = new FrostEffect()
   const smaa = quality.smaa ? new SMAAEffect({ preset: SMAAPreset.HIGH }) : null
-  const normalPass = quality.low ? null : new NormalPass(scene, camera, { resolutionScale: 0.75 })
+  const normalPass = quality.low || softGpu ? null : new NormalPass(scene, camera, { resolutionScale: 0.75 })
   const ssao = normalPass
     ? new SSAOEffect(camera, normalPass.texture, {
         samples: 16,
@@ -153,13 +163,18 @@ export async function startExperience(overlay: Overlay) {
     composer.addPass(normalPass)
     composer.addPass(new EffectPass(camera, ssao))
   }
-  const tone = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC })
+  const tone = new ToneMappingEffect({ mode: ToneMappingMode.AGX })
   composer.addPass(new EffectPass(camera, bloom))
+  // SwiftShader spends seconds inside the DoF pass. Keep it off until the
+  // igloo has decoded, or the loader never reaches the reveal threshold.
+  const dofPass = new EffectPass(camera, dof)
+  dofPass.enabled = false
+  composer.addPass(dofPass)
   composer.addPass(new EffectPass(camera, warp))
   composer.addPass(new EffectPass(camera, chromatic))
   if (smaa) composer.addPass(new EffectPass(camera, smaa))
   composer.addPass(
-    new EffectPass(camera, noise, vignette, tone),
+    new EffectPass(camera, noise, frost, vignette, tone),
   )
 
   let dpr = Math.min(window.devicePixelRatio || 1, quality.dprCap)
@@ -217,7 +232,7 @@ export async function startExperience(overlay: Overlay) {
 
   let figureGroup: Object3D | null = null
   const [meteor, rings, figure] = await Promise.all([
-    createMeteor(quality, renderer),
+    createMeteor(quality),
     createRings(quality),
     createFigure(quality),
   ])
@@ -229,6 +244,9 @@ export async function startExperience(overlay: Overlay) {
 
   const pos = new Vector3()
   const target = new Vector3()
+  // The look target is rewritten in place every frame. DoF follows it,
+  // so the subject stays sharp and the mountains fall off.
+  dof.target = target
   if (window.__blendy) {
     const probe = new Vector3()
     window.__blendy.debug = () => {
@@ -276,6 +294,7 @@ export async function startExperience(overlay: Overlay) {
     overlay.setActive(screen)
     lenis.resize()
     lenis.start()
+    dofPass.enabled = true
     if (shot != null) {
       scrollToFraction(shot)
       shotLocks = 48
@@ -816,32 +835,14 @@ function applyGrade(
   aspect: number,
 ) {
   const burst = phase.screen === 'field' ? phase.burst : 0
-  let intensity = 0.08 + burst * 0.28
-  let threshold = 0.97
-  if (phase.screen === 'field') {
-    intensity = 0.1 + phase.solid * 0.62 + burst * 0.4
-    threshold = 0.7
-  }
-  const toneBlend = phase.screen === 'field' ? BlendFunction.SKIP : BlendFunction.SRC
-  if (tone.blendMode.blendFunction !== toneBlend) tone.blendMode.blendFunction = toneBlend
-  if (phase.screen === 'rings') {
-    intensity = 0.55
-    threshold = 0.88
-  }
-  if (phase.screen === 'meteor') {
-    intensity = 0.28 + phase.meteorT * 0.2
-    // Stay above the glass body so only a hot centre can bloom.
-    threshold = 0.96
-  }
-  if (phase.white > 0.4) intensity += 0.22
-  bloom.intensity = intensity
-  bloom.luminanceMaterial.threshold = threshold
-  const figure = phase.screen === 'figure'
-  const lightPaper = phase.screen === 'meteor' || phase.screen === 'rings' || (phase.screen === 'field' && phase.solid < 0.25)
-  vignette.darkness = figure ? 0.5 : lightPaper ? 0.05 : 0.22
-  vignette.offset = figure ? 0.4 : lightPaper ? 0.6 : 0.42
-  const fringe = phase.chroma > 0.02 ? phase.chroma * 0.011 : 0
-  chromatic.offset.set(fringe, fringe * 0.62)
+  // One filmed grade for every scene. Bloom stays on the rims, not the snow.
+  if (tone.blendMode.blendFunction !== BlendFunction.SRC) tone.blendMode.blendFunction = BlendFunction.SRC
+  bloom.intensity = 0.16 + burst * 0.06
+  bloom.luminanceMaterial.threshold = 0.86
+  vignette.darkness = 0.32
+  vignette.offset = 0.38
+  const fringe = 0.0011 + (phase.chroma > 0.02 ? phase.chroma * 0.003 : 0)
+  chromatic.offset.set(fringe, fringe * 0.55)
   warp.setWarp(phase.ripple, phase.blur, phase.glitch, phase.white, phase.riftT + phase.figureT, aspect)
 }
 

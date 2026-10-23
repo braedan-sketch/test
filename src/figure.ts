@@ -42,7 +42,7 @@ export async function createFigure(quality: Quality): Promise<Figure> {
 
   const material = new ShaderMaterial({
     transparent: true,
-    depthWrite: false,
+    depthWrite: true,
     fog: false,
     blending: NormalBlending,
     uniforms: {
@@ -61,37 +61,33 @@ export async function createFigure(quality: Quality): Promise<Figure> {
       varying float vSeed;
       varying float vShade;
       varying float vAlpha;
+      varying float vEye;
       void main() {
         vSeed = aSeed;
         vShade = aShade;
         float gate = smoothstep(aSeed * 0.55, aSeed * 0.55 + 0.28, uAppear);
-        vec3 p = position;
-        float s = sin(uTime * 1.35 + aSeed * 40.0);
-        float c = cos(uTime * 1.1 + aSeed * 23.0);
-        p.x += s * 0.0035;
-        p.y += c * 0.004;
-        p.z += sin(uTime * 0.9 + aSeed * 15.0) * 0.003;
-        float lift = uBlow * uBlow;
-        p.y += lift * (0.15 + aSeed * 2.8);
-        p.x += lift * (aSeed - 0.5) * 0.55;
-        p.z += lift * (fract(aSeed * 13.7) - 0.5) * 0.55;
-        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vEye = -mv.z;
         gl_Position = projectionMatrix * mv;
-        gl_PointSize = clamp((0.28 + aSeed * 0.32) * uPixel * (26.0 / max(1.0, -mv.z)), 0.45, 1.35);
-        vAlpha = gate * (1.0 - smoothstep(0.35, 0.96, uBlow)) * (0.78 + 0.22 * (0.5 + 0.5 * s));
+        gl_PointSize = clamp(uPixel * (22.0 / max(0.45, vEye)), 2.4, 7.0);
+        vAlpha = gate * (1.0 - smoothstep(0.85, 1.0, uBlow));
       }
     `,
     fragmentShader: /* glsl */ `
       varying float vSeed;
       varying float vShade;
       varying float vAlpha;
+      varying float vEye;
       void main() {
         vec2 d = gl_PointCoord - vec2(0.5);
         float r = length(d);
-        if (r > 0.5) discard;
-        float falloff = smoothstep(0.5, 0.08, r);
-        vec3 color = mix(vec3(0.20, 0.23, 0.26), vec3(0.96, 0.98, 1.0), vShade);
-        gl_FragColor = vec4(color, falloff * vAlpha * 0.9);
+        if (r > 0.46) discard;
+        float bead = pow(clamp(1.0 - r * 2.15, 0.0, 1.0), 1.5);
+        float depth = smoothstep(1.4, 7.5, vEye);
+        float lit = clamp(vShade * (1.0 - depth * 0.35), 0.0, 1.0);
+        vec3 color = mix(vec3(0.40, 0.46, 0.52), vec3(0.84, 0.88, 0.92), lit);
+        color += vec3(0.16, 0.18, 0.2) * bead * lit;
+        gl_FragColor = vec4(color, vAlpha);
       }
     `,
   })
@@ -103,7 +99,7 @@ export async function createFigure(quality: Quality): Promise<Figure> {
 
   const normalMaterial = new ShaderMaterial({
     transparent: true,
-    depthWrite: false,
+    depthWrite: true,
     fog: false,
     blending: NormalBlending,
     uniforms: {
@@ -121,46 +117,38 @@ export async function createFigure(quality: Quality): Promise<Figure> {
       varying float vSeed;
       varying float vShade;
       varying float vAlpha;
+      varying float vEye;
       void main() {
         vSeed = aSeed;
-      vec3 n = normalize(mat3(modelMatrix) * normal);
-      float ndl = dot(n, normalize(vec3(0.62, 0.52, -0.38)));
-      float under = smoothstep(0.2, -0.55, n.y);
-      float lit = smoothstep(-0.02, 0.38, ndl);
-      float shade = mix(lit, lit * 0.12, under);
-      vec3 nView = normalize(mat3(normalMatrix) * normal);
-      float rim = pow(1.0 - clamp(abs(nView.z), 0.0, 1.0), 2.4);
-      vShade = clamp(shade + rim * 0.1, 0.0, 1.0);
+        vec3 n = normalize(mat3(modelMatrix) * normal);
+        float ndl = dot(n, normalize(vec3(0.45, 0.72, 0.34)));
+        float under = smoothstep(0.15, -0.65, n.y);
+        float away = smoothstep(0.15, -0.45, dot(normalize(mat3(normalMatrix) * normal), vec3(0.0, 0.0, 1.0)));
+        float lit = smoothstep(-0.15, 0.55, ndl);
+        vShade = clamp(mix(lit, lit * 0.22, max(under, away * 0.85)), 0.0, 1.0);
         float gate = smoothstep(aSeed * 0.45, aSeed * 0.45 + 0.22, uAppear);
-        vec3 p = position;
-        float s = sin(uTime * 1.15 + aSeed * 40.0);
-        p.x += s * 0.002;
-        p.y += cos(uTime * 0.9 + aSeed * 17.0) * 0.002;
-        // A slice of the cloud leaves toward screen-upper-right. The rest of the bust stays put.
-        float depart = smoothstep(0.1, 0.5, uBlow);
-        float leave = depart * (1.0 - smoothstep(0.06, 0.38, aSeed));
-        float stream = leave * leave;
-        p.x += stream * (0.75 + (1.0 - aSeed) * 2.4);
-        p.y += stream * (0.65 + (1.0 - aSeed) * 2.8);
-        p.z += stream * (fract(aSeed * 13.7) - 0.5) * 0.85;
-        vShade = clamp(vShade + leave * 0.8, 0.0, 1.0);
-        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vEye = -mv.z;
         gl_Position = projectionMatrix * mv;
-        gl_PointSize = clamp(uPixel * (8.2 / max(1.0, -mv.z)), 1.2, 2.15);
-        vAlpha = gate * (1.0 - smoothstep(0.78, 0.98, uBlow));
+        gl_PointSize = clamp(uPixel * (28.0 / max(0.4, vEye)), 3.2, 9.0);
+        vAlpha = gate * (1.0 - smoothstep(0.85, 1.0, uBlow));
       }
     `,
     fragmentShader: /* glsl */ `
       varying float vSeed;
       varying float vShade;
       varying float vAlpha;
+      varying float vEye;
       void main() {
         vec2 d = gl_PointCoord - vec2(0.5);
         float r = length(d);
-        if (r > 0.5) discard;
-        float falloff = smoothstep(0.5, 0.12, r);
-        vec3 color = mix(vec3(0.015, 0.016, 0.02), vec3(1.0), vShade);
-        gl_FragColor = vec4(color, falloff * vAlpha);
+        if (r > 0.46) discard;
+        float bead = pow(clamp(1.0 - r * 2.1, 0.0, 1.0), 1.7);
+        float depth = smoothstep(1.2, 8.0, vEye);
+        float lit = clamp(vShade * (1.0 - depth * 0.28), 0.0, 1.0);
+        vec3 color = mix(vec3(0.22, 0.27, 0.33), vec3(0.90, 0.93, 0.96), lit);
+        color += vec3(0.18, 0.2, 0.22) * bead * lit;
+        gl_FragColor = vec4(color, vAlpha);
       }
     `,
   })

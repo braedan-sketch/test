@@ -16,7 +16,7 @@ import {
   LineSegments,
   Mesh,
   MeshBasicMaterial,
-  PlaneGeometry,
+  CircleGeometry,
   PointLight,
   Points,
   PointsMaterial,
@@ -38,7 +38,7 @@ import dracoWasm from 'three/examples/jsm/libs/draco/gltf/draco_decoder.wasm?url
 import dracoWrapper from 'three/examples/jsm/libs/draco/gltf/draco_wasm_wrapper.js?url'
 import { brand } from './brand'
 import { publicUrl } from './heroModel'
-import { createBlockMaterial, type BlockUniforms } from './ice'
+import { createBlockMaterial, createIceSlabMaterial, type BlockUniforms } from './ice'
 import { clamp, hash01, hashString, smoother } from './math'
 import type { Quality } from './quality'
 
@@ -231,32 +231,43 @@ function prepareBakedMaterial(root: Object3D, uniforms: BlockUniforms) {
     if (current instanceof MeshBasicMaterial) source = current
   })
   const material = source ?? new MeshBasicMaterial({ color: '#c5ced6' })
-  material.toneMapped = false
+  material.toneMapped = true
   if (material.map) material.map.colorSpace = SRGBColorSpace
   material.fog = true
-  material.customProgramCacheKey = () => 'blendy-baked-igloo-v5'
+  material.customProgramCacheKey = () => 'blendy-baked-igloo-v7'
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uSolid = uniforms.uSolid
     shader.uniforms.uDissolve = uniforms.uDissolve
+    // uHasAlbedo stays 0 until a KTX2 albedo replaces the old atlas.
+    const albedo = { value: material.map }
+    const hasAlbedo = { value: 0 }
+    material.userData.maps = { albedo, hasAlbedo }
+    shader.uniforms.uAlbedo = albedo
+    shader.uniforms.uHasAlbedo = hasAlbedo
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
         `#include <common>
         attribute float aSeed;
-        varying float vSeed;`,
+        varying float vSeed;
+        varying vec3 vWorld;`,
       )
       .replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
-        vSeed = aSeed;`,
+        vSeed = aSeed;
+        vWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
       )
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
         `#include <common>
         varying float vSeed;
+        varying vec3 vWorld;
         uniform float uSolid;
-        uniform float uDissolve;`,
+        uniform float uDissolve;
+        uniform sampler2D uAlbedo;
+        uniform float uHasAlbedo;`,
       )
       .replace(
         '#include <color_fragment>',
@@ -264,13 +275,27 @@ function prepareBakedMaterial(root: Object3D, uniforms: BlockUniforms) {
         if (uSolid < 0.04 && uDissolve < 0.2) discard;
         if (uSolid < 0.999 && vSeed > uSolid) discard;
         if (uDissolve > 0.001 && vSeed < uDissolve) discard;
-        float luma = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
-        // Faces stay moody ice. Only the seam cracks climb past the bloom threshold.
-        diffuseColor.rgb *= mix(0.62, 0.92, smoothstep(0.12, 0.62, luma));
-        if (luma > 0.78) {
-          float hot = min(1.55, 0.78 + (luma - 0.78) * 3.4);
-          diffuseColor.rgb *= hot / max(luma, 0.001);
-        }`,
+        vec3 base;
+        if (uHasAlbedo > 0.5) {
+          base = texture2D(uAlbedo, vMapUv).rgb;
+        } else {
+          float luma = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+          vec3 snowLo = vec3(0.62, 0.68, 0.73);
+          vec3 snowHi = vec3(0.88, 0.91, 0.94);
+          vec3 snow = mix(snowLo, snowHi, smoothstep(0.04, 0.5, luma));
+          // The baked seams are hot white strips. Pull them back into the snow.
+          snow = mix(snow, snowHi * 0.8, smoothstep(0.72, 0.96, luma));
+          float grit = fract(sin(dot(vWorld.xyz, vec3(19.7, 43.1, 7.3))) * 12543.2);
+          float pit = fract(sin(dot(floor(vWorld * 14.0), vec3(12.9, 78.2, 45.1))) * 43758.5);
+          base = snow * (0.9 + grit * 0.08 + pit * 0.06);
+        }
+        vec3 n = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
+        vec3 viewDir = normalize(cameraPosition - vWorld);
+        float ndv = clamp(abs(dot(n, viewDir)), 0.0, 1.0);
+        float rim = pow(1.0 - ndv, 2.2);
+        float wrap = pow(ndv, 0.45);
+        diffuseColor.rgb = base * (0.78 + wrap * 0.28);
+        diffuseColor.rgb += vec3(0.72, 0.86, 1.0) * rim * 0.42;`,
       )
   }
   return material
@@ -310,6 +335,7 @@ export async function loadIgloo(
 
   const pieces: Piece[] = []
   const box = new Box3()
+  const blockers: Mesh[] = []
 
   group.traverse((object) => {
     if (!asMesh(object)) return
@@ -319,6 +345,12 @@ export async function loadIgloo(
     const geometry = mesh.geometry
     const position = geometry.getAttribute('position')
     if (!(position instanceof BufferAttribute)) return
+
+    // A flat card standing in the mouth. It reads as a grey rectangle behind the bricks.
+    if (mesh.name.startsWith('Tunnel Back')) {
+      blockers.push(mesh)
+      return
+    }
 
     const hash = hashString(mesh.name || `piece-${pieces.length}`)
     const count = position.count
@@ -353,6 +385,13 @@ export async function loadIgloo(
       tag: '',
     })
   })
+  for (const mesh of blockers) mesh.removeFromParent()
+
+  const slab = createIceSlabMaterial(uniforms)
+  for (const piece of pieces) {
+    const ice = piece.tunnel || piece.mesh.name.startsWith('Crown Slab')
+    if (ice) piece.mesh.material = slab
+  }
 
   const shell = pieces.filter((piece) => !piece.tunnel)
   const core = new Vector3()
@@ -384,12 +423,13 @@ export async function loadIgloo(
   const shadowMap = radialTexture('rgba(0,0,0,0.5)', 'rgba(0,0,0,0)')
   const glowMap = radialTexture('rgba(255,255,255,1)', 'rgba(255,255,255,0)')
   const contact = new Mesh(
-    new PlaneGeometry(7.4, 6.4),
+    new CircleGeometry(2.15, 48),
     new MeshBasicMaterial({
       map: shadowMap ?? undefined,
       transparent: true,
       depthWrite: false,
-      color: '#1a2228',
+      color: '#ffffff',
+      opacity: 0.2,
     }),
   )
   contact.rotation.x = -Math.PI / 2
@@ -629,7 +669,7 @@ export async function loadIgloo(
       spill.intensity = (0.55 + open * 4.5) * presence
       spill.distance = 1.6 + open * 1.8
       ;(spillSprite.material as SpriteMaterial).opacity = (0.07 + open * 0.16) * presence
-      ;(contact.material as MeshBasicMaterial).opacity = 0.78 * (1 - smoother(burst) * 0.45) * solid * (1 - dissolve)
+      ;(contact.material as MeshBasicMaterial).opacity = 0.22 * (1 - smoother(burst) * 0.85) * solid * (1 - dissolve)
 
       for (const piece of pieces) {
         const span = Math.max(0.001, 1 - piece.delay)

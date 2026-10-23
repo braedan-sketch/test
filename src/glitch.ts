@@ -1,4 +1,4 @@
-const glyphs = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/#+'
+const glyphs = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
 const generation = new WeakMap<HTMLElement, number>()
 const timers = new WeakMap<HTMLElement, number>()
 

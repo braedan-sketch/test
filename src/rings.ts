@@ -1,10 +1,12 @@
 import {
   AdditiveBlending,
+  CircleGeometry,
   Color,
   Group,
   Mesh,
   MeshBasicMaterial,
   MeshPhysicalMaterial,
+  ShaderMaterial,
   Object3D,
   PointLight,
   SphereGeometry,
@@ -117,9 +119,12 @@ export async function createRings(quality: Quality): Promise<Rings> {
   if (hero) {
     for (const band of bands) band.group.visible = false
     core.visible = false
+    const ringMeshes: Mesh[] = []
     hero.traverse((object) => {
       const mesh = object as Mesh
-      if (!mesh.isMesh) return
+      if (mesh.isMesh) ringMeshes.push(mesh)
+    })
+    for (const mesh of ringMeshes) {
       const source = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
       const maps = source as { normalMap?: Texture | null; roughnessMap?: Texture | null }
       const normalMap = maps.normalMap ?? null
@@ -129,10 +134,17 @@ export async function createRings(quality: Quality): Promise<Rings> {
         roughnessMap: roughnessMap ?? null,
         kind: 'rings',
       })
-    })
+    }
     fitHero(hero, 4.6)
     hero.position.y = 0.2
     root.add(hero)
+    const field = new Mesh(new CircleGeometry(6.4, 72), ringFieldMaterial())
+    field.name = 'ring-field'
+    field.rotation.x = -Math.PI / 2
+    field.position.y = -0.45
+    field.frustumCulled = false
+    field.renderOrder = -1
+    root.add(field)
     const heart = new Mesh(
       new SphereGeometry(0.16, 24, 16),
       new MeshBasicMaterial({ color: '#ffffff', toneMapped: false }),
@@ -181,6 +193,34 @@ export async function createRings(quality: Quality): Promise<Rings> {
       if (halo) halo.material.opacity = 0.22 + shown * 0.28
     },
   }
+}
+
+function ringFieldMaterial() {
+  return new ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    fog: false,
+    toneMapped: false,
+    blending: AdditiveBlending,
+    vertexShader: /* glsl */ `
+      varying vec2 vP;
+      void main() {
+        vP = position.xy;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying vec2 vP;
+      void main() {
+        vec2 g = abs(fract(vP * 1.35) - 0.5);
+        float line = 1.0 - smoothstep(0.02, 0.055, min(g.x, g.y));
+        float fade = 1.0 - smoothstep(3.2, 6.1, length(vP));
+        float glow = line * fade;
+        if (glow < 0.25) discard;
+        gl_FragColor = vec4(vec3(0.62, 0.8, 0.95), glow * 0.55);
+      }
+    `,
+  })
 }
 
 type RingRig = {

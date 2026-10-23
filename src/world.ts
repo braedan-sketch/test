@@ -25,13 +25,9 @@ import {
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
-import { lerp } from './math'
 import type { Quality } from './quality'
 
-const FIELD = new Color('#7d868e')
-const VOID = new Color('#2c343c')
-const RINGS = new Color('#161b20')
-const FIGURE = new Color('#8e979f')
+const HAZE = new Color('#8ea0ac')
 
 // Camera looks from +Z, so the snow in front of the entrance is positive Z.
 const CRATERS: Array<[number, number, number, number]> = [
@@ -126,7 +122,7 @@ export type World = {
 }
 
 export function createWorld(scene: Scene, quality: Quality): World {
-  const fog = new FogExp2(FIELD.clone(), 0.034)
+  const fog = new FogExp2(HAZE.clone(), 0.012)
   scene.fog = fog
   scene.add(buildSky())
 
@@ -147,7 +143,7 @@ export function createWorld(scene: Scene, quality: Quality): World {
     roughness: 1,
     metalness: 0,
   })
-  terrainMat.customProgramCacheKey = () => 'blendy-snow-v6'
+  terrainMat.customProgramCacheKey = () => 'blendy-snow-v7'
   let terrainMood: { value: number } | null = null
   terrainMat.onBeforeCompile = (shader) => {
     shader.uniforms.uDetail = { value: detail }
@@ -200,23 +196,17 @@ export function createWorld(scene: Scene, quality: Quality): World {
         float pebbleFade = 1.0 - smoothstep(0.12, 0.85, fw * 8.0);
         float macro = sin(xz.x * 0.085 + 0.7) * sin(xz.y * 0.063 - 0.4);
         float broad = sin(xz.x * 0.027 + xz.y * 0.021 + 1.4);
-        vec3 rockCol = vec3(0.008, 0.009, 0.011);
-        vec3 snowCol = vec3(0.055, 0.060, 0.066);
+        vec3 rockCol = vec3(0.28, 0.32, 0.36);
+        vec3 snowCol = vec3(0.72, 0.76, 0.80);
         float cover = macro * 0.55 + broad * 0.35 + (grit - 0.5) * 1.35 + grain * fade * 0.7 + pebble * pebbleFade * 0.45;
-        diffuseColor.rgb = mix(rockCol, snowCol, smoothstep(-0.25, 0.45, cover));
-        diffuseColor.rgb *= 0.62 + grit * 0.85 + abs(grain) * fade * 0.45;
-        float voidMix = smoothstep(0.4, 1.0, uMood) * (1.0 - smoothstep(1.15, 1.55, uMood));
-        float ringsMix = smoothstep(1.35, 1.9, uMood) * (1.0 - smoothstep(2.05, 2.55, uMood));
-        vec2 cell = abs(fract(xz * 0.55) - 0.5);
-        float line = 1.0 - smoothstep(0.012, 0.035, min(cell.x, cell.y));
-        vec3 floorCol = mix(vec3(0.58, 0.59, 0.61), vec3(0.32, 0.33, 0.35), line);
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.03, 0.033, 0.038), voidMix);
-        diffuseColor.rgb = mix(diffuseColor.rgb, floorCol, ringsMix);`,
+        float drift = smoothstep(-0.2, 0.4, cover);
+        diffuseColor.rgb = mix(rockCol, snowCol, drift);
+        diffuseColor.rgb *= 0.86 + grit * 0.22 + abs(grain) * fade * 0.18;`,
       )
       .replace(
         '#include <opaque_fragment>',
         `#include <opaque_fragment>
-        gl_FragColor.rgb = mix(gl_FragColor.rgb, floorCol, ringsMix);`,
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.62, 0.68, 0.74), 0.08);`,
       )
   }
   const terrain = new Mesh(geometry, terrainMat)
@@ -239,17 +229,16 @@ export function createWorld(scene: Scene, quality: Quality): World {
       const color = fogColor(mood)
       fog.color.copy(color)
       fog.density = wire > 0.5 ? 0.001 : fogDensity(mood)
-      if (wire > 0.5) fog.color.set('#c5c8cc')
+      if (wire > 0.5) fog.color.set('#b7c3cc')
       if (skyMat) {
         skyMat.uniforms.uMood!.value = mood
         skyMat.uniforms.uWire!.value = wire
       }
       if (terrainMood) terrainMood.value = mood
-      // The snow field is the igloo ground. Rings and the crystal sit on the sky instead, so the mesh cannot cover them.
-      terrain.visible = mood < 0.45 && wire < 0.45
+      terrain.visible = wire < 0.45
       groundWire.root.visible = wire > 0.15
       groundWire.setOpacity(Math.min(1, Math.max(0, (wire - 0.15) / 0.5)))
-      snow.points.visible = mood < 0.85 && wire < 0.4
+      snow.points.visible = wire < 0.4
       const attr = snow.points.geometry.getAttribute('position')
       if (attr && snow.points.visible) {
         for (let i = 0; i < snow.count; i += 1) {
@@ -365,39 +354,22 @@ function buildSky() {
         vec3 d = normalize(vDir);
         float h = d.y;
         float ang = atan(d.z, d.x);
-        float ridge = sin(ang * 1.7 + 0.4) * 0.62 + sin(ang * 3.4 + 1.1) * 0.34 + sin(ang * 6.6 + 0.3) * 0.16;
-        vec3 haze = vec3(0.26, 0.29, 0.32);
-        vec3 zenith = vec3(0.12, 0.14, 0.18);
-        vec3 field = mix(haze, zenith, smoothstep(0.0, 0.55, h));
-        float crest = 0.16 + ridge * 0.24;
-        float peaks = smoothstep(crest + 0.06, crest - 0.06, h);
-        float ridgeShade = 0.35 + 0.65 * sin(ang * 3.1 + 0.8);
-        vec3 ridgeCol = mix(vec3(0.20, 0.23, 0.26), vec3(0.08, 0.09, 0.11), ridgeShade);
-        field = mix(field, ridgeCol, peaks * (1.0 - smoothstep(0.12, 1.15, uMood)));
-        vec3 voidCol = vec3(0.58, 0.59, 0.61);
-        float grid = 0.0;
-        float dots = 0.0;
-        if (uMood > 0.45 && uMood < 1.7) {
-          vec2 gv = vec2(atan(d.z, d.x) * 18.0, h * 26.0);
-          vec2 cell = abs(fract(gv) - 0.5);
-          dots = 1.0 - smoothstep(0.06, 0.14, length(cell));
-          voidCol = mix(voidCol, vec3(0.28, 0.30, 0.33), dots * 0.85);
-        }
-        if (uMood > 1.15 && uMood < 2.4) {
-          vec2 cell = abs(fract(vec2(atan(d.z, d.x) * 10.0, h * 18.0)) - 0.5);
-          grid = 1.0 - smoothstep(0.015, 0.04, min(cell.x, cell.y));
-        }
-        float down = smoothstep(0.35, -0.9, h);
-        vec3 rings = mix(vec3(0.62, 0.63, 0.65), vec3(0.50, 0.51, 0.53), down);
-        rings = mix(rings, vec3(0.34, 0.35, 0.37), grid * 0.65);
-        vec3 figure = vec3(0.20, 0.205, 0.215);
-        vec3 color = field;
-        float m = clamp(uMood, 0.0, 3.0);
-        color = mix(color, voidCol, clamp(m, 0.0, 1.0));
-        color = mix(color, rings, clamp(m - 1.0, 0.0, 1.0));
-        color = mix(color, figure, clamp(m - 2.0, 0.0, 1.0));
-        vec3 paper = vec3(0.36, 0.37, 0.39);
-        color = mix(color, paper, clamp(uWire, 0.0, 1.0));
+        float ridge = sin(ang * 1.7 + 0.4) * 0.55 + sin(ang * 3.4 + 1.1) * 0.32 + sin(ang * 6.8 + 0.2) * 0.16;
+        float ridgeFar = sin(ang * 2.4 + 2.1) * 0.42 + sin(ang * 5.2 + 0.5) * 0.22;
+        vec3 haze = vec3(0.56, 0.63, 0.69);
+        vec3 zenith = vec3(0.30, 0.36, 0.44);
+        vec3 color = mix(haze, zenith, smoothstep(-0.02, 0.62, h));
+        float crest = 0.07 + ridge * 0.2;
+        float peaks = smoothstep(crest + 0.045, crest - 0.04, h);
+        float crestFar = 0.0 + ridgeFar * 0.14;
+        float farPeaks = smoothstep(crestFar + 0.04, crestFar - 0.05, h) * (1.0 - peaks);
+        float shade = 0.42 + 0.58 * sin(ang * 3.1 + 0.8);
+        vec3 farMtn = mix(vec3(0.48, 0.55, 0.62), vec3(0.36, 0.42, 0.48), shade);
+        vec3 nearMtn = mix(vec3(0.34, 0.40, 0.46), vec3(0.20, 0.24, 0.29), shade);
+        color = mix(color, farMtn, farPeaks * 0.9);
+        color = mix(color, nearMtn, peaks * 0.94);
+        float mist = smoothstep(0.22, -0.2, h);
+        color = mix(color, haze, mist * 0.7);
         gl_FragColor = vec4(color, 1.0);
       }
     `,
@@ -510,15 +482,12 @@ function buildSnow(count: number) {
 }
 
 const moodColor = new Color()
+const FAR_HAZE = new Color('#7e94a2')
 
 function fogColor(mood: number) {
-  if (mood <= 1) return moodColor.copy(FIELD).lerp(VOID, mood)
-  if (mood <= 2) return moodColor.copy(VOID).lerp(RINGS, mood - 1)
-  return moodColor.copy(RINGS).lerp(FIGURE, Math.min(1, mood - 2))
+  return moodColor.copy(HAZE).lerp(FAR_HAZE, mood > 1.15 ? 0.15 : 0)
 }
 
 function fogDensity(mood: number) {
-  if (mood <= 1) return lerp(0.004, 0.006, mood)
-  if (mood <= 2) return lerp(0.006, 0.003, mood - 1)
-  return lerp(0.003, 0.001, Math.min(1, mood - 2))
+  return mood > 1.2 ? 0.016 : 0.012
 }
