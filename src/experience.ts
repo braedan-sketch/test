@@ -92,7 +92,7 @@ export async function startExperience(overlay: Overlay) {
   renderer.outputColorSpace = SRGBColorSpace
   renderer.toneMapping = NoToneMapping
   renderer.toneMappingExposure = 0.9
-  renderer.transmissionResolutionScale = quality.low ? 0.35 : 1
+  renderer.transmissionResolutionScale = quality.low ? 0.35 : 1.25
   renderer.setClearColor('#c5c8cc', 1)
   if (quality.shadows) {
     renderer.shadowMap.enabled = true
@@ -346,6 +346,9 @@ export async function startExperience(overlay: Overlay) {
         screen = nav
         overlay.setActive(screen)
       }
+      // The rings frames stay chrome-free. The arrival (stop 08) does not.
+      if (phase.screen === 'rings') document.body.dataset.quiet = 'rings'
+      else delete document.body.dataset.quiet
       fadeMeteorCopy(phase)
       if (!cornerPulsed && phase.burst > 0.04 && phase.screen === 'field') {
         cornerPulsed = true
@@ -765,7 +768,7 @@ function crystalAimY(aspect: number, distance: number) {
 }
 
 function fadeMeteorCopy(phase: Phase) {
-  const node = document.querySelector(".stage[data-screen='meteor'] .sticky")
+  const node = document.querySelector(".stage[data-screen='meteor'] .copy")
   if (!(node instanceof HTMLElement)) return
   const fade =
     phase.screen === 'meteor'

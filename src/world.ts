@@ -410,10 +410,11 @@ function buildSky() {
 
 function gridHeight(x: number, z: number) {
   const radius = Math.hypot(x, z)
-  let height = Math.sin(x * 0.16 + 0.4) * Math.sin(z * 0.13 + 1.1) * 0.72
-  height += Math.sin(x * 0.045 + 0.8) * Math.cos(z * 0.038 - 0.3) * 1.05
-  height += Math.sin(x * 0.28 - z * 0.09) * Math.cos(x * 0.07 + z * 0.19) * 0.26
-  height += x * 0.06 + Math.max(0, -z) * 0.015
+  let height = Math.sin(x * 0.16 + 0.4) * Math.sin(z * 0.13 + 1.1) * 0.55
+  height += Math.sin(x * 0.045 + 0.8) * Math.cos(z * 0.038 - 0.3) * 0.7
+  height += Math.sin(x * 0.28 - z * 0.09) * Math.cos(x * 0.07 + z * 0.19) * 0.08
+  // The snow rises to screen-right. Ease it so the far grid does not kink.
+  height += Math.tanh(x * 0.09) * 0.35 + Math.max(0, -z) * 0.01
   const pad = Math.exp(-radius * radius * 0.2)
   return height * (1 - pad * 0.97)
 }

@@ -456,15 +456,24 @@ body[data-screen='rift'] .sound {
   border-bottom: 1px solid currentColor;
 }
 
-body[data-screen='rings'] header,
-body[data-screen='rings'] .rail,
-body[data-screen='rings'] .telemetry,
-body[data-screen='rings'] .leaders,
-body[data-screen='rings'] .tags,
-body[data-screen='rings'] .frame,
-body[data-screen='rings'] .sticky,
-body[data-screen='rings'] .cycle {
+/* Quiet only once the rings section is actually on screen. Stop 08 switches
+   the nav early, and that must not blank the header, the rail, or the copy. */
+body[data-quiet='rings'] header,
+body[data-quiet='rings'] .rail,
+body[data-quiet='rings'] .telemetry,
+body[data-quiet='rings'] .leaders,
+body[data-quiet='rings'] .tags,
+body[data-quiet='rings'] .frame,
+body[data-quiet='rings'] .sticky,
+body[data-quiet='rings'] .cycle {
   opacity: 0;
+}
+
+body[data-screen='rings']:not([data-quiet='rings']) .stage[data-screen='rings'] .sticky {
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  opacity: 1;
 }
 
 body[data-screen='figure'] {
@@ -572,6 +581,10 @@ body[data-screen='meteor'] .tags {
   .stage[data-screen='figure'] .title { font-size: 20px; line-height: 1; }
   .stage[data-screen='figure'] .body { margin-top: 2px; font-size: 10px; line-height: 1.25; }
   .stage[data-screen='figure'] .contact { margin-top: 2px; font-size: 10px; }
+  body[data-screen='figure'] .sound {
+    left: 16px;
+    bottom: calc(3vh + 44px);
+  }
   body[data-screen='figure'] .frame i:nth-child(1),
   body[data-screen='figure'] .frame i:nth-child(3) { left: 18px; }
   body[data-screen='figure'] .frame i:nth-child(2),

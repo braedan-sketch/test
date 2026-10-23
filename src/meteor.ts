@@ -10,7 +10,6 @@ import {
   LineBasicMaterial,
   LineSegments,
   IcosahedronGeometry,
-  BackSide,
   Mesh,
   MeshBasicMaterial,
   MeshPhysicalMaterial,
@@ -255,25 +254,22 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
       if (envMap) {
         const physical = new MeshPhysicalMaterial({
           color: new Color('#ffffff'),
-          roughness: 0.03,
+          roughness: 0,
           metalness: 0,
           transmission: 1,
           thickness: 1.2,
           ior: 1.55,
-          dispersion: 0.8,
-          iridescence: 0.85,
-          iridescenceIOR: 1.3,
-          iridescenceThicknessRange: [180, 640],
-          attenuationColor: new Color('#eef3f7'),
-          attenuationDistance: 10,
+          dispersion: 1.25,
+          iridescence: 0,
+          attenuationColor: new Color('#ffffff'),
+          attenuationDistance: 40,
           specularIntensity: 1.9,
           envMap,
           envMapIntensity: 0.32,
           normalMap,
         })
-        // The baked normal is heavy. A light scale keeps the chip without
-        // scattering the dot grid into a milky centre.
-        physical.normalScale.set(0.18, 0.18)
+        // A heavy normal scatters the dot grid into dark specks.
+        physical.normalScale.set(0.04, 0.04)
         mesh.material = physical
       } else {
         mesh.material = createGlassMaterial({
@@ -291,38 +287,52 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
       }
     }
     fitHero(hero, 2.15)
+    let glowRadius = 1
     for (const mesh of crystalMeshes) {
-      const shell = new Mesh(
-        mesh.geometry,
-        new MeshBasicMaterial({
-          color: '#ffffff',
-          transparent: true,
-          opacity: 0.6,
-          side: BackSide,
-          depthWrite: false,
-          fog: false,
-          toneMapped: false,
-        }),
-      )
-      shell.name = 'crystal-rim'
-      shell.scale.setScalar(1.012)
-      shell.renderOrder = 3
-      mesh.add(shell)
-      const inner = new Mesh(
-        mesh.geometry,
-        new MeshBasicMaterial({
-          color: '#f4f8ff',
-          transparent: true,
-          opacity: 0.2,
-          blending: AdditiveBlending,
-          depthWrite: false,
-          depthTest: false,
-          fog: false,
-          toneMapped: false,
-        }),
-      )
+      if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere()
+      glowRadius = Math.max(glowRadius, mesh.geometry.boundingSphere?.radius ?? 1)
+    }
+    const glowMat = new ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: AdditiveBlending,
+      fog: false,
+      toneMapped: false,
+      uniforms: { uRadius: { value: glowRadius } },
+      vertexShader: /* glsl */ `
+        varying vec3 vNormal;
+        varying vec3 vWorld;
+        varying vec3 vLocal;
+        void main() {
+          vLocal = position;
+          vec4 world = modelMatrix * vec4(position, 1.0);
+          vWorld = world.xyz;
+          vNormal = normalize(mat3(modelMatrix) * normal);
+          gl_Position = projectionMatrix * viewMatrix * world;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        varying vec3 vNormal;
+        varying vec3 vWorld;
+        varying vec3 vLocal;
+        uniform float uRadius;
+        void main() {
+          vec3 n = normalize(vNormal);
+          vec3 toView = cameraPosition - vWorld;
+          float vLen = length(toView);
+          vec3 v = vLen > 1e-5 ? toView / vLen : vec3(0.0, 0.0, 1.0);
+          float facing = smoothstep(0.0, 0.7, clamp(dot(n, v), 0.0, 1.0));
+          float radial = 1.0 - smoothstep(0.0, uRadius, length(vLocal));
+          float glow = facing * facing * (0.22 + 0.78 * radial);
+          gl_FragColor = vec4(vec3(0.92), glow);
+        }
+      `,
+    })
+    for (const mesh of crystalMeshes) {
+      const inner = new Mesh(mesh.geometry, glowMat)
       inner.name = 'crystal-core'
-      inner.scale.setScalar(0.4)
+      inner.scale.setScalar(0.98)
       inner.renderOrder = 2
       mesh.add(inner)
     }
