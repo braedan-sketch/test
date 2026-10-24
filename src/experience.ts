@@ -38,6 +38,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { brand, type ScreenId } from './brand'
 import { createFigure } from './figure'
 import { FrostEffect } from './frost'
+import { bindHeroProgress } from './heroModel'
 import { loadIgloo, makeLabelSlots, type Igloo, type LabelAnchor } from './igloo'
 import { clamp, lerp, smoother } from './math'
 import { createMeteor, meteorCenter, type Meteor } from './meteor'
@@ -62,8 +63,8 @@ declare global {
   }
 }
 
-// v8 dome center. Lower and wider than v7, still lopsided toward +X.
-const EYE_TARGET: readonly [number, number, number] = [0.08, 0.98, 0.02]
+// v10 dome top is 2.35. Aim a little higher than the v9 seat.
+const EYE_TARGET: readonly [number, number, number] = [0.08, 1.18, 0.02]
 const EYE_DIR: readonly [number, number, number] = [0.42, 0.18, 1.55]
 const CRYSTAL_DIR: readonly [number, number, number] = [0.22, 0.04, 1]
 // Upright bust, base on the ring at y 0, ears near y 2. Look slightly up at the chest.
@@ -107,10 +108,11 @@ export async function startExperience(overlay: Overlay) {
   // Layer 1 is the crystal's inner glow. It stays out of the opaque
   // transmission pre-pass and is drawn with the transparent objects.
   camera.layers.enable(1)
-  let targetProgress = 0.04
-  const iglooPromise = loadIgloo(quality, renderer, (value) => {
-    targetProgress = Math.max(targetProgress, value)
+  let targetProgress = 0
+  bindHeroProgress((value) => {
+    targetProgress = Math.max(targetProgress, value * 0.92)
   })
+  const iglooPromise = loadIgloo(quality, renderer, () => {})
   const world = createWorld(scene, quality, renderer)
   scene.environment = createEnvironment(renderer)
   scene.environmentIntensity = 0.35
@@ -252,7 +254,7 @@ export async function startExperience(overlay: Overlay) {
 
   const pos = new Vector3()
   const target = new Vector3()
-  const focusPoint = new Vector3(0.08, 0.98, 0)
+  const focusPoint = new Vector3(0.08, 1.18, 0)
   // Field focus stays on the dome. Other scenes follow the look target.
   dof.target = focusPoint
   if (window.__blendy) {
@@ -338,7 +340,7 @@ export async function startExperience(overlay: Overlay) {
       shotLocks -= 1
     }
     if (!document.hidden) {
-      shown = lerp(shown, targetProgress, 0.08)
+      shown = lerp(shown, targetProgress, 0.35)
       if (!revealed) overlay.setProgress(shown)
       if (ready && shown > 0.985 && now - started > 550) reveal()
       // A multisampled frame blocks the Draco worker messages, so the igloo
@@ -358,7 +360,13 @@ export async function startExperience(overlay: Overlay) {
       clear.copy(world.fog.color)
       renderer.setClearColor(clear, 1)
       scene.environmentIntensity =
-        phase.screen === 'field' || phase.screen === 'rift' ? 0.1 : phase.screen === 'meteor' ? 0.72 : phase.screen === 'rings' ? 0.28 : 0.4
+        phase.screen === 'field' || phase.screen === 'rift'
+          ? 0.1
+          : phase.screen === 'meteor'
+            ? 0.26
+            : phase.screen === 'rings'
+              ? 0.22
+              : 0.22
 
       if (ssao) ssao.intensity = phase.screen === 'field' && phase.solid < 0.12 ? 0 : 0.85
       igloo?.update(phase.burst, phase.solid, phase.dissolve, reducedMotion ? 0 : now / 1000)
@@ -369,7 +377,7 @@ export async function startExperience(overlay: Overlay) {
 
       applyCamera(phase, pos, target, up, camera, clock)
       dof.target = phase.screen === 'field' ? focusPoint : target
-      applyGrade(phase, bloom, chromatic, warp, tone, vignette, camera.aspect)
+      applyGrade(phase, bloom, chromatic, warp, tone, vignette, frost, camera.aspect)
       overlay.setFlash(phase.flash * 0.35)
       overlay.setUiDim(phase.screen === 'rings' ? 1 : 1 - phase.burst * 0.04)
       overlay.setScrollProgress(global)
@@ -574,10 +582,10 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     up.set(0, 1, 0)
     const span = phase.burst
     const eyeWidth = lerp(4.4, 5.05, span)
-    const eyeHeight = lerp(2.55, 2.95, span)
+    const eyeHeight = lerp(2.75, 3.2, span)
     const dEye =
       aspect >= 1
-        ? desktopEyeDistance(eyeWidth, eyeHeight, aspect, fov) * 0.9
+        ? desktopEyeDistance(eyeWidth, eyeHeight, aspect, fov) * 0.72
         : fitBox(eyeWidth, eyeHeight, 0.78, 0.58, aspect, fov)
     placeAlong(pos, EYE_TARGET, EYE_DIR, dEye)
     // Look beside the dome so it sits in the centre-right third. Portrait is unchanged.
@@ -589,8 +597,8 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     const crystalPos: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
     const riftEye =
       aspect >= 1
-        ? desktopEyeDistance(5.05, 2.95, aspect, 40) * 0.9
-        : fitBox(5.05, 2.95, 0.78, 0.58, aspect, 40)
+        ? desktopEyeDistance(5.05, 3.2, aspect, 40) * 0.72
+        : fitBox(5.05, 3.2, 0.78, 0.58, aspect, 40)
     placeAlong(scratchA, EYE_TARGET, EYE_DIR, riftEye)
     placeAlong(scratchB, crystalPos, CRYSTAL_DIR, hold)
     const riftBlend = smoother(phase.riftT)
@@ -634,13 +642,13 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
 
 function placeRings(ringsT: number, aspect: number, pos: Vector3, target: Vector3, up: Vector3) {
   const portrait = aspect < 1
-  const fillW = portrait ? 0.92 : 0.74
-  const fillH = portrait ? 0.7 : 0.68
-  const dist = fitBox(4.2, 4.2, fillW, fillH, aspect, 32)
+  const fillW = portrait ? 0.88 : 0.9
+  const fillH = portrait ? 0.8 : 0.8
+  const dist = fitBox(3.35, 3.35, fillW, fillH, aspect, 32)
   // A few degrees off the portal axis so the stone's depth reads.
   const yaw = 0.34 + ringsT * 0.08
   const centerY = 2.25
-  pos.set(Math.sin(yaw) * dist, centerY + dist * (portrait ? 0.16 : 0.2), Math.cos(yaw) * dist)
+  pos.set(Math.sin(yaw) * dist, centerY + dist * 0.1, Math.cos(yaw) * dist)
   target.set(ringsT * 0.06, centerY, 0)
   up.set(0, 1, 0)
 }
@@ -784,7 +792,7 @@ function aimSubjectRight(look: Vector3, pos: Vector3, fraction: number, aspect: 
 function crystalHold(aspect: number) {
   const fillH = aspect >= 1 ? 0.42 : 0.26
   const fillW = aspect >= 1 ? 0.72 : 0.5
-  return fitBox(1.5, 2.15, fillW, fillH, aspect, 34)
+  return fitBox(1.05, 1.45, fillW, fillH, aspect, 34)
 }
 
 /** Portrait only: drop the aim so the shard centre sits at 35% from the top. */
@@ -838,30 +846,32 @@ function applyGrade(
   warp: WarpEffect,
   tone: ToneMappingEffect,
   vignette: VignetteEffect,
+  frost: FrostEffect,
   aspect: number,
 ) {
   const burst = phase.screen === 'field' ? phase.burst : 0
-  // Seams bloom on the hero. The fox stays under the threshold.
+  // Gap light blooms on the hero. Crystal highlights stay under the threshold.
   if (tone.blendMode.blendFunction !== BlendFunction.SRC) tone.blendMode.blendFunction = BlendFunction.SRC
   const figure = phase.screen === 'figure'
   const rings = phase.screen === 'rings'
   const heroGlow = phase.screen === 'field' || phase.screen === 'rift'
+  frost.setGrade(phase.screen === 'meteor' || figure ? 1 : 0)
   if (rings) {
-    bloom.intensity = 0.9
-    bloom.luminanceMaterial.threshold = 0.72
-    bloom.mipmapBlurPass.radius = 0.86
+    bloom.intensity = 0.42
+    bloom.luminanceMaterial.threshold = 0.88
+    bloom.mipmapBlurPass.radius = 0.48
   } else if (figure) {
-    bloom.intensity = 0.12
-    bloom.luminanceMaterial.threshold = 0.9
-    bloom.mipmapBlurPass.radius = 0.4
+    bloom.intensity = 0.08
+    bloom.luminanceMaterial.threshold = 0.94
+    bloom.mipmapBlurPass.radius = 0.35
   } else if (heroGlow) {
     bloom.intensity = 0.16 + burst * 0.03
-    bloom.luminanceMaterial.threshold = 0.93
-    bloom.mipmapBlurPass.radius = 0.38
-  } else {
-    bloom.intensity = 0.26
     bloom.luminanceMaterial.threshold = 0.9
-    bloom.mipmapBlurPass.radius = 0.45
+    bloom.mipmapBlurPass.radius = 0.35
+  } else {
+    bloom.intensity = 0.08
+    bloom.luminanceMaterial.threshold = 0.96
+    bloom.mipmapBlurPass.radius = 0.3
   }
   vignette.darkness = 0.55
   vignette.offset = 0.35

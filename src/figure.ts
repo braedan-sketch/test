@@ -122,11 +122,11 @@ export async function createFigure(quality: Quality): Promise<Figure> {
         vSeed = aSeed;
         vec3 n = normalize(mat3(modelMatrix) * normal);
         vec3 viewN = normalize(mat3(normalMatrix) * normal);
-        float ndl = dot(n, normalize(vec3(0.72, 0.48, 0.5)));
-        float under = smoothstep(0.15, -0.65, n.y);
-        float lit = smoothstep(-0.2, 0.78, ndl);
-        vShade = clamp(lit * (1.0 - under * 0.75), 0.0, 1.0);
-        vRim = pow(1.0 - clamp(abs(viewN.z), 0.0, 1.0), 1.45);
+        float ndl = dot(n, normalize(vec3(0.85, 0.22, 0.46)));
+        float under = smoothstep(0.2, -0.45, n.y);
+        float lit = smoothstep(0.08, 0.88, ndl);
+        vShade = clamp(lit * (1.0 - under * 0.9), 0.0, 1.0);
+        vRim = pow(1.0 - clamp(abs(viewN.z), 0.0, 1.0), 1.7);
         float gate = smoothstep(aSeed * 0.45, aSeed * 0.45 + 0.22, uAppear);
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
         vEye = -mv.z;
@@ -148,9 +148,9 @@ export async function createFigure(quality: Quality): Promise<Figure> {
         float bead = pow(clamp(1.0 - r * 2.1, 0.0, 1.0), 1.7);
         float depth = smoothstep(1.2, 8.0, vEye);
         float lit = clamp(vShade * (1.0 - depth * 0.12), 0.0, 1.0);
-        vec3 color = mix(vec3(0.02, 0.025, 0.035), vec3(0.9, 0.93, 0.97), lit);
-        color += vec3(1.0, 0.94, 0.84) * pow(lit, 2.2) * 0.42;
-        color += vec3(0.45, 0.72, 1.0) * vRim * 0.95;
+        vec3 color = mix(vec3(0.07, 0.08, 0.1), vec3(0.78, 0.82, 0.86), lit);
+        color += vec3(1.0, 0.95, 0.88) * pow(lit, 3.0) * 0.28;
+        color += vec3(0.35, 0.55, 0.75) * vRim * 0.32;
         color += vec3(0.12, 0.14, 0.16) * bead * lit;
         gl_FragColor = vec4(color, vAlpha);
       }
@@ -190,7 +190,7 @@ export async function createFigure(quality: Quality): Promise<Figure> {
   }
   const key = new PointLight('#fff1dc', 22, 11, 2)
   key.position.set(1.6, 2.8, 2.1)
-  const rim = new PointLight('#7eb6e6', 16, 10, 2)
+  const rim = new PointLight('#7eb6e6', 5, 8, 2)
   rim.position.set(-1.8, 1.9, -1.4)
   root.add(plinth, key, rim)
 

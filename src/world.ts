@@ -133,22 +133,52 @@ function materialsOf(mesh: Mesh) {
 function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
   if (Array.isArray(entry) || !(entry instanceof MeshStandardMaterial)) return
   entry.fog = true
-  // Foreground snow is the bright mass in the histogram. Darken it here, before
-  // the pale distance fog mixes back in, so the mound gains real shadow.
-  if (kind === 'terrain') entry.color.multiplyScalar(0.58)
+  if (kind === 'terrain') {
+    // v7 snow is already pale. A light grade keeps shadow in the mound.
+    // Roughness maps and metal flakes are what glitter on the near pad.
+    entry.color.multiplyScalar(0.5)
+    entry.roughness = 1
+    entry.metalness = 0
+    entry.roughnessMap = null
+    entry.metalnessMap = null
+    entry.envMapIntensity = 0
+    entry.normalScale.set(0.35, 0.35)
+  }
   const prior = entry.onBeforeCompile
   const priorKey = entry.customProgramCacheKey.bind(entry)
-  const curve = kind === 'terrain' ? '1.32' : '1.08'
-  const gain = kind === 'terrain' ? '0.9' : '1.0'
+  const curve = kind === 'terrain' ? '1.36' : '1.08'
+  const gain = kind === 'terrain' ? '0.88' : '1.0'
   entry.onBeforeCompile = (shader, renderer) => {
     prior.call(entry, shader, renderer)
-    shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <fog_fragment>',
-      `gl_FragColor.rgb = pow(max(gl_FragColor.rgb, vec3(0.0)), vec3(${curve})) * ${gain};
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <fog_fragment>',
+        `gl_FragColor.rgb = pow(max(gl_FragColor.rgb, vec3(0.0)), vec3(${curve})) * ${gain};
        #include <fog_fragment>`,
-    )
+      )
+      .replace(
+        '#include <lights_fragment_end>',
+        kind === 'terrain'
+          ? `#include <lights_fragment_end>
+       reflectedLight.directSpecular *= 0.04;
+       reflectedLight.indirectSpecular *= 0.04;`
+          : '#include <lights_fragment_end>',
+      )
+    if (kind === 'terrain') {
+      // The repeated spike band sits in the 14–20 m ring of terrain.glb.
+      // Drop those vertices onto the mound and leave the pad and the ranges.
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         vec4 spikeWorld = modelMatrix * vec4(transformed, 1.0);
+         float spikeR = length(spikeWorld.xz);
+         float spikeBand = smoothstep(7.0, 11.0, spikeR) * (1.0 - smoothstep(20.0, 30.0, spikeR));
+         float mound = 0.02 - smoothstep(4.0, 24.0, spikeR) * 0.45;
+         transformed.y = mix(transformed.y, min(transformed.y, mound), spikeBand);`,
+      )
+    }
   }
-  entry.customProgramCacheKey = () => `${priorKey()}-${kind}`
+  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v8`
 }
 
 function buildSky() {

@@ -1,4 +1,4 @@
-import { Box3, Group, Vector3, type WebGLRenderer } from 'three'
+import { Box3, Group, LoadingManager, Vector3, type WebGLRenderer } from 'three'
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js'
@@ -6,6 +6,41 @@ import dracoWasm from 'three/examples/jsm/libs/draco/gltf/draco_decoder.wasm?url
 import dracoWrapper from 'three/examples/jsm/libs/draco/gltf/draco_wasm_wrapper.js?url'
 
 let basisLoader: KTX2Loader | null = null
+
+const heroManager = new LoadingManager()
+const heroBytes = new Map<string, { loaded: number; total: number }>()
+let heroProgressListener: ((value: number) => void) | null = null
+let heroProgressHigh = 0
+let heroItemsLoaded = 0
+let heroItemsTotal = 0
+
+function emitHeroProgress() {
+  let loaded = 0
+  let total = 0
+  for (const slot of heroBytes.values()) {
+    if (slot.total <= 0) continue
+    loaded += slot.loaded
+    total += slot.total
+  }
+  const bytes = total > 0 ? loaded / total : 0
+  const items = heroItemsTotal > 0 ? heroItemsLoaded / heroItemsTotal : 0
+  const value = Math.max(bytes, items)
+  heroProgressHigh = Math.max(heroProgressHigh, value)
+  heroProgressListener?.(heroProgressHigh)
+}
+
+heroManager.onProgress = (_url, loaded, total) => {
+  heroItemsLoaded = loaded
+  heroItemsTotal = total
+  emitHeroProgress()
+}
+heroManager.onLoad = () => emitHeroProgress()
+
+/** Download fraction across hero GLBs, from file bytes when the length is known. */
+export function bindHeroProgress(listener: (value: number) => void) {
+  heroProgressListener = listener
+  listener(heroProgressHigh)
+}
 
 function ktx2Loader(renderer: WebGLRenderer) {
   if (!basisLoader) {
@@ -49,12 +84,16 @@ export async function loadHero(
 
   const draco = new DRACOLoader()
   draco.setDecoderPath({ js: dracoWrapper, wasm: dracoWasm })
-  const loader = new GLTFLoader()
+  const loader = new GLTFLoader(heroManager)
   loader.setDRACOLoader(draco)
   if (renderer) loader.setKTX2Loader(ktx2Loader(renderer))
+  heroBytes.set(url, { loaded: 0, total: 0 })
   try {
     const gltf = await loader.loadAsync(url, (event) => {
-      if (options?.onProgress && event.total > 0) options.onProgress(event.loaded / event.total)
+      const total = event.total > 0 ? event.total : (heroBytes.get(url)?.total ?? 0)
+      heroBytes.set(url, { loaded: event.loaded, total })
+      emitHeroProgress()
+      if (options?.onProgress && total > 0) options.onProgress(event.loaded / total)
     })
     const scene = gltf.scene
     scene.name = url

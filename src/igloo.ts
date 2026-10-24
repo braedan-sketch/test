@@ -1,5 +1,6 @@
 import {
-  EdgesGeometry,
+  BufferGeometry,
+  Float32BufferAttribute,
   Group,
   LineBasicMaterial,
   LineSegments,
@@ -25,8 +26,8 @@ const LABEL_OFFSETS: Array<[number, number]> = [
   [-13, 2],
 ]
 
-/** Cool gap light. The bake's 35% side wash is masked back to the bright edges. */
-const EMISSIVE_INTENSITY = 1.4
+/** v10 bakes near-white seam light. This only sets its strength. */
+const EMISSIVE_INTENSITY = 2.8
 
 export type LabelAnchor = {
   position: Vector3
@@ -48,6 +49,7 @@ export type Igloo = {
 
 type Block = {
   node: Object3D
+  mesh: Mesh
   wire: LineSegments
   kind: string
   row: number
@@ -96,16 +98,16 @@ export async function loadIgloo(
 
   group.traverse((object) => {
     if (!(object instanceof Mesh)) return
-    object.castShadow = quality.shadows
-    object.receiveShadow = quality.shadows
+    object.castShadow = false
+    object.receiveShadow = false
     object.frustumCulled = true
     const node = blockCarrier(object)
     const extras = readExtras(node.userData)
-    object.material = dressSnow(object.material, shared, solidUniforms, extras.row >= 4)
+    object.material = dressSnow(object.material, shared, solidUniforms)
 
     if (seen.has(node)) return
     seen.add(node)
-    const wire = new LineSegments(new EdgesGeometry(object.geometry, 22), wireMaterial)
+    const wire = new LineSegments(slabEdges(object.geometry), wireMaterial)
     wire.name = 'igloo-wire'
     wire.renderOrder = 3
     wire.frustumCulled = false
@@ -113,6 +115,7 @@ export async function loadIgloo(
     const base = node.position.clone()
     blocks.push({
       node,
+      mesh: object,
       wire,
       kind: extras.kind,
       row: extras.row,
@@ -134,8 +137,8 @@ export async function loadIgloo(
     uCenter: { value: new Vector3() },
   }
   const worldPoint = new Vector3()
-  const gapLight = new PointLight('#c5d7ee', 0, 3.6, 2)
-  gapLight.position.set(0, 0.72, 0)
+  const gapLight = new PointLight('#f3f6fb', 0, 4.6, 2)
+  gapLight.position.set(0, 0.9, 0)
   group.add(gapLight)
   const snowMaterials = [...shared.values()]
 
@@ -150,11 +153,12 @@ export async function loadIgloo(
       for (const slot of solidUniforms) slot.value = solid
       group.visible = dissolve < 0.985
       const present = smoother(clamp(solid * 1.15, 0, 1)) * (1 - smoother(dissolve))
-      gapLight.intensity = present * 2.2
-      // Stops 00–01 stay wire. The solid mesh writes nothing until the lines fade,
-      // so it cannot fill in as a grey silhouette or z-fight through the courses.
+      gapLight.intensity = present * 3.4
+      // Stops 00–01 stay wire. The solid writes nothing and casts nothing, so it
+      // cannot leave a black disc in the snow under the dome.
       const fade = smoother(clamp((solid - 0.04) / 0.26, 0, 1))
       const opaque = fade > 0.97
+      const shadow = quality.shadows && fade > 0.6
       for (const material of snowMaterials) {
         material.opacity = fade
         material.transparent = !opaque
@@ -165,6 +169,8 @@ export async function loadIgloo(
       const showWire = wireMaterial.opacity > 0.02
       const open = burst * (1 - smoother(dissolve))
       for (const block of blocks) {
+        block.mesh.castShadow = shadow
+        block.mesh.receiveShadow = shadow
         block.wire.visible = showWire
         const travel = blockTravel(block, open)
         const bob = Math.sin(time * 0.55 + block.phase) * 0.012 * travel
@@ -211,56 +217,77 @@ function dressSnow(
   material: Mesh['material'],
   shared: Map<string, MeshStandardMaterial>,
   solidUniforms: Array<{ value: number }>,
-  cap: boolean,
 ) {
   const source = Array.isArray(material) ? material[0] : material
   if (!(source instanceof MeshStandardMaterial)) return material
-  const key = cap ? 'cap' : 'snow'
-  const existing = shared.get(key)
+  const existing = shared.get('snow')
   if (existing) return existing
   const entry = source.clone()
-  entry.color.multiplyScalar(0.82)
-  entry.emissive.setRGB(0.75, 0.86, 1)
+  // v10 faces are already pale. Darken them so the seam glow reads like igloo's.
+  entry.color.multiplyScalar(0.85)
+  entry.emissive.setRGB(0.94, 0.97, 1)
   entry.emissiveIntensity = EMISSIVE_INTENSITY
   entry.metalness = 0
   entry.envMapIntensity = 0.08
   entry.toneMapped = true
   entry.fog = true
-  entry.transparent = false
-  const uniforms = { uSolid: { value: 1 }, uCap: { value: cap ? 1 : 0 } }
+  // Hidden until the solid fade. A visible mesh here casts the black disc
+  // under the dome on the first frame after the loader.
+  entry.transparent = true
+  entry.opacity = 0
+  entry.colorWrite = false
+  entry.depthWrite = false
+  const uniforms = { uSolid: { value: 0 } }
   const prior = entry.onBeforeCompile
   const priorKey = entry.customProgramCacheKey.bind(entry)
   entry.onBeforeCompile = (shader, renderer) => {
     prior.call(entry, shader, renderer)
     shader.uniforms.uSolid = uniforms.uSolid
-    shader.uniforms.uCap = uniforms.uCap
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
         `#include <common>
-        uniform float uSolid;
-        uniform float uCap;`,
+        uniform float uSolid;`,
       )
       .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
-        totalEmissiveRadiance *= vec3(0.75, 0.86, 1.0) * smoothstep(0.2, 0.75, uSolid);
-        float e = max(totalEmissiveRadiance.r, max(totalEmissiveRadiance.g, totalEmissiveRadiance.b));
-        float gaps = smoothstep(0.4, 0.82, e);
-        totalEmissiveRadiance *= mix(0.12, 1.0, gaps);
-        totalEmissiveRadiance *= mix(1.0, 0.32, uCap);
-        totalEmissiveRadiance = min(totalEmissiveRadiance, vec3(0.85));`,
-      )
-      .replace(
-        '#include <fog_fragment>',
-        `gl_FragColor.rgb = pow(max(gl_FragColor.rgb, vec3(0.0)), vec3(1.2));
-        #include <fog_fragment>`,
+        totalEmissiveRadiance *= smoothstep(0.15, 0.7, uSolid);`,
       )
   }
-  entry.customProgramCacheKey = () => `${priorKey()}-igloo-v8`
+  entry.customProgramCacheKey = () => `${priorKey()}-igloo-v10`
   solidUniforms.push(uniforms.uSolid)
-  shared.set(key, entry)
+  shared.set('snow', entry)
   return entry
+}
+
+/** Twelve edges of the block's local box. The sculpt triangulation stays out of the wire. */
+function slabEdges(geometry: BufferGeometry) {
+  geometry.computeBoundingBox()
+  const box = geometry.boundingBox
+  const geo = new BufferGeometry()
+  if (!box) return geo
+  const { min, max } = box
+  const corners = [
+    [min.x, min.y, min.z],
+    [max.x, min.y, min.z],
+    [max.x, min.y, max.z],
+    [min.x, min.y, max.z],
+    [min.x, max.y, min.z],
+    [max.x, max.y, min.z],
+    [max.x, max.y, max.z],
+    [min.x, max.y, max.z],
+  ]
+  const pairs = [0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7]
+  const positions: number[] = []
+  for (let i = 0; i < pairs.length; i += 2) {
+    const a = corners[pairs[i] ?? 0]
+    const b = corners[pairs[i + 1] ?? 0]
+    if (!a || !b) continue
+    positions.push(a[0] ?? 0, a[1] ?? 0, a[2] ?? 0, b[0] ?? 0, b[1] ?? 0, b[2] ?? 0)
+  }
+  geo.setAttribute('position', new Float32BufferAttribute(positions, 3))
+  return geo
 }
 
 function blockCarrier(mesh: Mesh) {

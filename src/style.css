@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@550;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
-
 :root {
   --fog: #c5ced4;
   --ink: #172024;
@@ -651,8 +649,16 @@ body[data-screen='meteor'] .tags {
   body[data-screen='rings'] .corner,
   body[data-screen='rings'] .sound,
   body[data-screen='rings'] .copy,
-  body[data-screen='rings'] .rail {
-    background: rgba(14, 20, 26, 0.72);
+  body[data-screen='rings'] .rail,
+  body[data-screen='figure'] .brand-block,
+  body[data-screen='figure'] .corner,
+  body[data-screen='figure'] .sound,
+  body[data-screen='figure'] .copy,
+  body[data-screen='figure'] .rail,
+  body[data-screen='figure'] .contact {
+    background: rgba(14, 20, 26, 0.38);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     padding: 8px 10px;
     border-radius: 2px;
   }
@@ -688,7 +694,9 @@ body[data-screen='meteor'] .tags {
 
   body[data-screen='meteor'] .tag,
   body[data-screen='rift'] .tag {
-    background: rgba(14, 20, 26, 0.72);
+    background: rgba(14, 20, 26, 0.38);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     padding: 2px 6px;
   }
 }
