@@ -64,7 +64,7 @@ export function createWorld(scene: Scene, quality: Quality, renderer: WebGLRende
       const mesh = object as Mesh
       if (!mesh.isMesh) return
       mesh.frustumCulled = false
-      for (const entry of materialsOf(mesh)) gradeSurface(entry)
+      for (const entry of materialsOf(mesh)) gradeSurface(entry, 'range')
     })
     ranges.add(hero)
   })
@@ -77,7 +77,7 @@ export function createWorld(scene: Scene, quality: Quality, renderer: WebGLRende
       if (!mesh.isMesh) return
       mesh.frustumCulled = false
       mesh.receiveShadow = quality.shadows
-      for (const entry of materialsOf(mesh)) gradeSurface(entry)
+      for (const entry of materialsOf(mesh)) gradeSurface(entry, 'terrain')
       terrainMeshes.push(mesh)
     })
     terrainRoot.add(hero)
@@ -130,20 +130,25 @@ function materialsOf(mesh: Mesh) {
   return Array.isArray(mesh.material) ? mesh.material : [mesh.material]
 }
 
-function gradeSurface(entry: Mesh['material']) {
+function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
   if (Array.isArray(entry) || !(entry instanceof MeshStandardMaterial)) return
   entry.fog = true
+  // Foreground snow is the bright mass in the histogram. Darken it here, before
+  // the pale distance fog mixes back in, so the mound gains real shadow.
+  if (kind === 'terrain') entry.color.multiplyScalar(0.58)
   const prior = entry.onBeforeCompile
   const priorKey = entry.customProgramCacheKey.bind(entry)
+  const curve = kind === 'terrain' ? '1.32' : '1.08'
+  const gain = kind === 'terrain' ? '0.9' : '1.0'
   entry.onBeforeCompile = (shader, renderer) => {
     prior.call(entry, shader, renderer)
     shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <opaque_fragment>',
-      `#include <opaque_fragment>
-       gl_FragColor.rgb = pow(max(gl_FragColor.rgb, vec3(0.0)), vec3(1.12)) * 1.05;`,
+      '#include <fog_fragment>',
+      `gl_FragColor.rgb = pow(max(gl_FragColor.rgb, vec3(0.0)), vec3(${curve})) * ${gain};
+       #include <fog_fragment>`,
     )
   }
-  entry.customProgramCacheKey = () => `${priorKey()}-range`
+  entry.customProgramCacheKey = () => `${priorKey()}-${kind}`
 }
 
 function buildSky() {
@@ -242,5 +247,5 @@ function fogColor() {
 }
 
 function fogDensity(mood: number) {
-  return mood > 1.2 ? 0.0044 : 0.0032
+  return mood > 1.2 ? 0.0034 : 0.0022
 }

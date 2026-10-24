@@ -62,8 +62,8 @@ declare global {
   }
 }
 
-// Dome center. Direction is about 6° down so the camera sits low and close.
-const EYE_TARGET: readonly [number, number, number] = [0.06, 1.15, 0.12]
+// v8 dome center. Lower and wider than v7, still lopsided toward +X.
+const EYE_TARGET: readonly [number, number, number] = [0.08, 0.98, 0.02]
 const EYE_DIR: readonly [number, number, number] = [0.42, 0.18, 1.55]
 const CRYSTAL_DIR: readonly [number, number, number] = [0.22, 0.04, 1]
 // Upright bust, base on the ring at y 0, ears near y 2. Look slightly up at the chest.
@@ -137,9 +137,9 @@ export async function startExperience(overlay: Overlay) {
   const softGpu = softwareGpu(renderer)
   const dof = new DepthOfFieldEffect(camera, {
     focusDistance: 8,
-    focusRange: 2.8,
-    bokehScale: quality.low ? 0.35 : softGpu ? 0.65 : 1.6,
-    resolutionScale: quality.low || softGpu ? 0.25 : 0.5,
+    focusRange: 7.5,
+    bokehScale: quality.low ? 0.18 : softGpu ? 0.32 : 0.48,
+    resolutionScale: quality.low || softGpu ? 0.25 : 0.75,
   })
   const warp = new WarpEffect()
   const noise = new NoiseEffect({
@@ -252,7 +252,7 @@ export async function startExperience(overlay: Overlay) {
 
   const pos = new Vector3()
   const target = new Vector3()
-  const focusPoint = new Vector3(0, 1.15, 0)
+  const focusPoint = new Vector3(0.08, 0.98, 0)
   // Field focus stays on the dome. Other scenes follow the look target.
   dof.target = focusPoint
   if (window.__blendy) {
@@ -358,13 +358,13 @@ export async function startExperience(overlay: Overlay) {
       clear.copy(world.fog.color)
       renderer.setClearColor(clear, 1)
       scene.environmentIntensity =
-        phase.screen === 'field' || phase.screen === 'rift' ? 0.16 : phase.screen === 'meteor' ? 0.85 : 0.55
+        phase.screen === 'field' || phase.screen === 'rift' ? 0.1 : phase.screen === 'meteor' ? 0.72 : phase.screen === 'rings' ? 0.28 : 0.4
 
       if (ssao) ssao.intensity = phase.screen === 'field' && phase.solid < 0.12 ? 0 : 0.85
       igloo?.update(phase.burst, phase.solid, phase.dissolve, reducedMotion ? 0 : now / 1000)
       meteor.update(phase.meteorReveal, reducedMotion ? 0 : now / 1000)
       const clock = reducedMotion ? 0 : now / 1000
-      rings.update(phase.ringsT + clock * 0.04, phase.ringsShown)
+      rings.update(phase.ringsT, phase.ringsShown)
       figure.update(phase.figureAppear, phase.figureBlow, clock, dpr)
 
       applyCamera(phase, pos, target, up, camera, clock)
@@ -573,11 +573,11 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     target.set(EYE_TARGET[0], EYE_TARGET[1], EYE_TARGET[2])
     up.set(0, 1, 0)
     const span = phase.burst
-    const eyeWidth = lerp(3.65, 4.3, span)
-    const eyeHeight = lerp(2.45, 2.85, span)
+    const eyeWidth = lerp(4.4, 5.05, span)
+    const eyeHeight = lerp(2.55, 2.95, span)
     const dEye =
       aspect >= 1
-        ? desktopEyeDistance(eyeWidth, eyeHeight, aspect, fov) * 0.82
+        ? desktopEyeDistance(eyeWidth, eyeHeight, aspect, fov) * 0.9
         : fitBox(eyeWidth, eyeHeight, 0.78, 0.58, aspect, fov)
     placeAlong(pos, EYE_TARGET, EYE_DIR, dEye)
     // Look beside the dome so it sits in the centre-right third. Portrait is unchanged.
@@ -589,8 +589,8 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
     const crystalPos: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
     const riftEye =
       aspect >= 1
-        ? desktopEyeDistance(4.3, 2.85, aspect, 40) * 0.82
-        : fitBox(4.3, 2.85, 0.78, 0.58, aspect, 40)
+        ? desktopEyeDistance(5.05, 2.95, aspect, 40) * 0.9
+        : fitBox(5.05, 2.95, 0.78, 0.58, aspect, 40)
     placeAlong(scratchA, EYE_TARGET, EYE_DIR, riftEye)
     placeAlong(scratchB, crystalPos, CRYSTAL_DIR, hold)
     const riftBlend = smoother(phase.riftT)
@@ -614,7 +614,7 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
       fov = lerp(34, 36, leave)
     }
   } else if (phase.screen === 'rings') {
-    fov = 36
+    fov = 32
     placeRings(phase.ringsT, aspect, pos, target, up)
   } else {
     fov = 34
@@ -634,10 +634,14 @@ function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, c
 
 function placeRings(ringsT: number, aspect: number, pos: Vector3, target: Vector3, up: Vector3) {
   const portrait = aspect < 1
-  const dist = fitBox(6.6, 2.6, portrait ? 0.46 : 0.58, portrait ? 0.26 : 0.4, aspect, 36)
-  const yaw = 0.72 + ringsT * 0.06
-  pos.set(Math.sin(yaw) * dist, Math.max(1.15, dist * (portrait ? 0.3 : 0.24)), Math.cos(yaw) * dist)
-  target.set(0, 0.7, 0)
+  const fillW = portrait ? 0.92 : 0.74
+  const fillH = portrait ? 0.7 : 0.68
+  const dist = fitBox(4.2, 4.2, fillW, fillH, aspect, 32)
+  // A few degrees off the portal axis so the stone's depth reads.
+  const yaw = 0.34 + ringsT * 0.08
+  const centerY = 2.25
+  pos.set(Math.sin(yaw) * dist, centerY + dist * (portrait ? 0.16 : 0.2), Math.cos(yaw) * dist)
+  target.set(ringsT * 0.06, centerY, 0)
   up.set(0, 1, 0)
 }
 
@@ -840,9 +844,25 @@ function applyGrade(
   // Seams bloom on the hero. The fox stays under the threshold.
   if (tone.blendMode.blendFunction !== BlendFunction.SRC) tone.blendMode.blendFunction = BlendFunction.SRC
   const figure = phase.screen === 'figure'
+  const rings = phase.screen === 'rings'
   const heroGlow = phase.screen === 'field' || phase.screen === 'rift'
-  bloom.intensity = figure ? 0.1 : heroGlow ? 0.32 + burst * 0.05 : 0.38
-  bloom.luminanceMaterial.threshold = figure ? 0.94 : 0.88
+  if (rings) {
+    bloom.intensity = 0.9
+    bloom.luminanceMaterial.threshold = 0.72
+    bloom.mipmapBlurPass.radius = 0.86
+  } else if (figure) {
+    bloom.intensity = 0.12
+    bloom.luminanceMaterial.threshold = 0.9
+    bloom.mipmapBlurPass.radius = 0.4
+  } else if (heroGlow) {
+    bloom.intensity = 0.16 + burst * 0.03
+    bloom.luminanceMaterial.threshold = 0.93
+    bloom.mipmapBlurPass.radius = 0.38
+  } else {
+    bloom.intensity = 0.26
+    bloom.luminanceMaterial.threshold = 0.9
+    bloom.mipmapBlurPass.radius = 0.45
+  }
   vignette.darkness = 0.55
   vignette.offset = 0.35
   const fringe = 0.0011 + (phase.chroma > 0.02 ? phase.chroma * 0.001 : 0)
@@ -914,8 +934,8 @@ function softwareGpu(renderer: WebGLRenderer) {
 }
 
 function addLights(scene: Scene, shadows: boolean) {
-  scene.add(new HemisphereLight('#e7eef4', '#c5d0da', 0.55))
-  const key = new DirectionalLight('#f4f7f8', 2.1)
+  scene.add(new HemisphereLight('#d5dee6', '#6d7882', 0.32))
+  const key = new DirectionalLight('#f7f4ee', 2.7)
   key.position.set(-6.5, 12.5, 9.5)
   key.target.position.set(0.1, 1.2, 0)
   scene.add(key, key.target)
@@ -935,7 +955,7 @@ function addLights(scene: Scene, shadows: boolean) {
     key.shadow.bias = -0.0016
     key.shadow.normalBias = 0.085
   }
-  const fill = new DirectionalLight('#c5d0da', 0.16)
+  const fill = new DirectionalLight('#9aa8b4', 0.08)
   fill.position.set(7.5, 3.2, 6)
   scene.add(fill)
 }
