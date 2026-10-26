@@ -1,4 +1,4 @@
-import { Box3, Group, LoadingManager, Vector3, type WebGLRenderer } from 'three'
+import { Box3, Group, LoadingManager, Vector3, type Texture, type WebGLRenderer } from 'three'
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js'
@@ -42,6 +42,20 @@ function ktx2Loader(renderer: WebGLRenderer) {
     basisLoader.detectSupport(renderer)
   }
   return basisLoader
+}
+
+/** One external KTX2. A missing file returns null so a handoff can arrive later. */
+export async function loadKtx2(url: string, renderer: WebGLRenderer): Promise<Texture | null> {
+  const resolved = publicUrl(url)
+  try {
+    const head = await fetch(resolved, { method: 'HEAD' })
+    const type = head.headers.get('content-type') ?? ''
+    if (!head.ok || type.includes('text/html')) return null
+    return await ktx2Loader(renderer).loadAsync(resolved)
+  } catch (error) {
+    console.warn(`KTX2 ${url} failed to load`, error)
+    return null
+  }
 }
 
 /** Asset URL that follows Vite's base, including `./` for a folder-relative build. */

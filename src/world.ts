@@ -18,6 +18,7 @@ import {
   type Scene,
   type WebGLRenderer,
 } from 'three'
+import { assignBakedMaps, bakedLights, bakeLightShader, type BakedSlot } from './baked'
 import { loadHero } from './heroModel'
 import type { Quality } from './quality'
 
@@ -37,7 +38,13 @@ export type World = {
   adoptGround: (object: Object3D | null) => void
 }
 
-export function createWorld(scene: Scene, quality: Quality, renderer: WebGLRenderer): World {
+export function createWorld(
+  scene: Scene,
+  quality: Quality,
+  renderer: WebGLRenderer,
+  bakedTerrain: Promise<BakedSlot | null> = Promise.resolve(null),
+  terrainModel: Promise<string | null> = Promise.resolve(null),
+): World {
   const fog = new FogExp2(HAZE.clone(), 0.0014)
   scene.fog = fog
   const sky = buildSky()
@@ -70,15 +77,27 @@ export function createWorld(scene: Scene, quality: Quality, renderer: WebGLRende
     ranges.add(hero)
   })
 
-  void loadHero('/models/terrain.glb', renderer, { eager: true }).then((hero) => {
+  void terrainModel
+    .then((model) => {
+      const heroP = model
+        ? loadHero(model, renderer, { eager: true }).then((override) => override ?? loadHero('/models/terrain.glb', renderer, { eager: true }))
+        : loadHero('/models/terrain.glb', renderer, { eager: true })
+      return Promise.all([heroP, bakedTerrain])
+    })
+    .then(([hero, baked]) => {
     if (!hero) return
     hero.name = 'terrain-mesh'
+    let missingUv = false
     hero.traverse((object) => {
       const mesh = object as Mesh
       if (!mesh.isMesh) return
       mesh.frustumCulled = false
       mesh.receiveShadow = quality.shadows
-      for (const entry of materialsOf(mesh)) gradeSurface(entry, 'terrain')
+      if (!missingUv && baked?.light && !mesh.geometry.getAttribute('uv1')) {
+        missingUv = true
+        console.warn('[baked] terrain lightmap expects UV2 (glTF TEXCOORD_1). This mesh has no uv1.')
+      }
+      for (const entry of materialsOf(mesh)) gradeSurface(entry, 'terrain', renderer, baked)
       terrainMeshes.push(mesh)
     })
     terrainRoot.add(hero)
@@ -132,7 +151,12 @@ function materialsOf(mesh: Mesh) {
   return Array.isArray(mesh.material) ? mesh.material : [mesh.material]
 }
 
-function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
+function gradeSurface(
+  entry: Mesh['material'],
+  kind: 'terrain' | 'range',
+  renderer?: WebGLRenderer,
+  baked: BakedSlot | null = null,
+) {
   if (Array.isArray(entry) || !(entry instanceof MeshStandardMaterial)) return
   entry.fog = true
   if (kind === 'terrain') {
@@ -140,15 +164,19 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
     entry.roughness = 1
     entry.metalness = 0
     entry.envMapIntensity = 0
-    entry.normalScale.set(kind === 'terrain' ? 1.45 : 1, kind === 'terrain' ? 1.45 : 1)
+    entry.normalScale.set(1, 1)
+    if (renderer) assignBakedMaps(entry, baked, renderer)
   }
   const prior = entry.onBeforeCompile
   const priorKey = entry.customProgramCacheKey.bind(entry)
-  const curve = kind === 'terrain' ? '0.92' : '0.96'
-  const gain = kind === 'terrain' ? '1.06' : '1.04'
+  const lit = kind === 'terrain' && bakedLights(baked)
+  const curve = kind === 'terrain' && baked?.albedo ? '1.0' : kind === 'terrain' ? '1.02' : '0.96'
+  const gain = kind === 'terrain' ? '1.0' : '1.04'
   entry.onBeforeCompile = (shader, renderer) => {
     prior.call(entry, shader, renderer)
-    shader.fragmentShader = shader.fragmentShader
+    let fragment = shader.fragmentShader
+    if (lit) fragment = bakeLightShader(fragment)
+    fragment = fragment
       .replace(
         '#include <fog_fragment>',
         `gl_FragColor.rgb = pow(max(gl_FragColor.rgb, vec3(0.0)), vec3(${curve})) * ${gain};
@@ -162,8 +190,9 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
        reflectedLight.indirectSpecular *= 0.04;`
           : '#include <lights_fragment_end>',
       )
+    shader.fragmentShader = fragment
     if (kind === 'terrain') {
-      // v12's rolling slopes stay. Only a foreground spike on +Z is knocked down.
+      // The mound is in the mesh. Flatten only the mid-distance past it.
       shader.vertexShader = shader.vertexShader.replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
@@ -178,7 +207,8 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
       )
     }
   }
-  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v14`
+  const bakedKey = lit ? '-baked' : ''
+  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v13${bakedKey}`
 }
 
 function buildSky() {
@@ -275,8 +305,8 @@ function buildSnow(count: number) {
 }
 
 function fogDensity(mood: number) {
-  // Slightly under the v11 0.016 so the new mid-distance slopes stay readable.
-  if (mood < 0.15) return 0.012
+  // The field (mood 0) matches the v11 preview: exponential fog 0.016 so the background goes soft.
+  if (mood < 0.15) return 0.016
   if (mood > 1.2) return 0.0022
   return 0.0035
 }

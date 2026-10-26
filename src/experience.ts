@@ -37,6 +37,7 @@ import {
   type Object3D,
 } from 'three'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
+import { describeBaked, startBakedPlan } from './baked'
 import { brand, type ScreenId } from './brand'
 import { createFigure } from './figure'
 import { FrostEffect } from './frost'
@@ -62,6 +63,7 @@ declare global {
       frame?: { ms: number; p50: number; p95: number; fps: number; n: number }
       measure?: () => Promise<GapMetric | null>
       metric?: GapMetric | null
+      baked?: ReturnType<typeof describeBaked>
     }
     __blendyScrollTo?: (fraction: number) => void
   }
@@ -134,8 +136,16 @@ export async function startExperience(overlay: Overlay) {
       overlay.setProgress(shown)
     }
   })
-  const iglooPromise = loadIgloo(quality, renderer, () => {})
-  const world = createWorld(scene, quality, renderer)
+  const bakedOn = new URLSearchParams(window.location.search).get('baked') === '1'
+  const bakedPlan = bakedOn ? startBakedPlan(renderer) : null
+  const iglooPromise = loadIgloo(
+    quality,
+    renderer,
+    () => {},
+    bakedPlan?.igloo ?? null,
+    bakedPlan?.iglooModel ?? null,
+  )
+  const world = createWorld(scene, quality, renderer, bakedPlan?.terrain ?? Promise.resolve(null), bakedPlan?.terrainModel ?? Promise.resolve(null))
   scene.environment = createEnvironment(renderer)
   scene.environmentIntensity = 0.35
   addLights(scene, quality.shadows)
@@ -269,6 +279,9 @@ export async function startExperience(overlay: Overlay) {
     },
     frame: frameStats,
   }
+  void (bakedPlan?.ready ?? Promise.resolve(null)).then((baked) => {
+    if (window.__blendy) window.__blendy.baked = describeBaked(baked)
+  })
   window.__blendyScrollTo = (fraction) => {
     shotLocks = 0
     scrollToFraction(fraction)

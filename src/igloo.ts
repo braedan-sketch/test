@@ -15,6 +15,7 @@ import {
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
+import { assignBakedMaps, bakedLights, bakeLightShader, type BakedSlot } from './baked'
 import { brand } from './brand'
 import { loadHero } from './heroModel'
 import type { BlockUniforms } from './ice'
@@ -86,12 +87,14 @@ export async function loadIgloo(
   quality: Quality,
   renderer: WebGLRenderer,
   onProgress: (value: number) => void,
+  baked: Promise<BakedSlot | null> | BakedSlot | null = null,
+  model: Promise<string | null> | string | null = null,
 ): Promise<Igloo> {
   onProgress(0.08)
-  const loaded = await loadHero('/models/igloo.glb', renderer, {
-    eager: true,
-    onProgress: (value) => onProgress(0.08 + value * 0.84),
-  })
+  const bakedP = Promise.resolve(baked)
+  const modelP = Promise.resolve(model)
+  const glbP = modelP.then((url) => loadIglooModel(renderer, url, (value) => onProgress(0.08 + value * 0.84)))
+  const [loaded, slot] = await Promise.all([glbP, bakedP])
   if (!loaded) throw new Error('igloo.glb missing')
   onProgress(0.94)
 
@@ -122,6 +125,7 @@ export async function loadIgloo(
   wireMaterial.toneMapped = false
   wireMaterial.resolution.set(window.innerWidth, window.innerHeight)
   const grid = groundGrid()
+  let missingUv = false
 
   group.traverse((object) => {
     if (!(object instanceof Mesh)) return
@@ -130,13 +134,17 @@ export async function loadIgloo(
     object.frustumCulled = true
     const node = blockCarrier(object)
     const extras = readExtras(node.userData)
-    object.material = dressSnow(object.material, shared, solidUniforms, burstUniforms, renderer)
+    object.material = dressSnow(object.material, shared, solidUniforms, burstUniforms, renderer, slot)
+    if (!missingUv && slot?.light && !object.geometry.getAttribute('uv1')) {
+      missingUv = true
+      console.warn('[baked] igloo lightmap expects UV2 (glTF TEXCOORD_1). This mesh has no uv1.')
+    }
     object.userData.iglooFace = true
 
     if (seen.has(node)) return
     seen.add(node)
     const base = node.position.clone()
-    const outline = brickEdges(object.geometry, node.position)
+    const outline = brickEdges(object.geometry)
     if (outline.box) fitted.push({ lines: outline.geometry, box: outline.box })
     wireCounts.push(outline.count)
     if (outline.hull) hulls += 1
@@ -287,12 +295,21 @@ export function makeLabelSlots(count: number): LabelAnchor[] {
   }))
 }
 
+async function loadIglooModel(renderer: WebGLRenderer, model: string | null, onProgress: (value: number) => void) {
+  if (model) {
+    const override = await loadHero(model, renderer, { eager: true, onProgress })
+    if (override) return override
+  }
+  return loadHero('/models/igloo.glb', renderer, { eager: true, onProgress })
+}
+
 function dressSnow(
   material: Mesh['material'],
   shared: Map<string, MeshStandardMaterial>,
   solidUniforms: Array<{ value: number }>,
   burstUniforms: Array<{ value: number }>,
   renderer: WebGLRenderer,
+  baked: BakedSlot | null,
 ) {
   const source = Array.isArray(material) ? material[0] : material
   if (!(source instanceof MeshStandardMaterial)) return material
@@ -300,18 +317,21 @@ function dressSnow(
   if (existing) return existing
   const entry = source.clone()
   // Faces only. The seam lives in the emissive map, so this does not dim the gaps.
-  entry.color.multiplyScalar(0.66)
+  // A baked albedo is already the paint, so the 0.66 face scale stays off it.
+  if (baked?.albedo) entry.color.set('#ffffff')
+  else entry.color.multiplyScalar(0.66)
   entry.emissive.setRGB(1, 1, 1)
   entry.emissiveIntensity = EMISSIVE_INTENSITY
   entry.normalScale.set(1.35, 1.35)
+  assignBakedMaps(entry, baked, renderer)
   const anisotropy = renderer.capabilities.getMaxAnisotropy()
-  for (const map of [entry.map, entry.normalMap, entry.roughnessMap, entry.aoMap, entry.emissiveMap, entry.metalnessMap]) {
+  for (const map of [entry.map, entry.normalMap, entry.roughnessMap, entry.aoMap, entry.emissiveMap, entry.metalnessMap, entry.lightMap]) {
     if (!map) continue
     map.anisotropy = anisotropy
     map.needsUpdate = true
   }
   entry.metalness = 0
-  entry.envMapIntensity = 0.08
+  if (!bakedLights(baked)) entry.envMapIntensity = 0.08
   entry.toneMapped = true
   // Field fog stays on the mountains. The igloo is the sharp subject in front of it.
   entry.fog = false
@@ -328,6 +348,7 @@ function dressSnow(
     prior.call(entry, shader, renderer)
     shader.uniforms.uSolid = uniforms.uSolid
     shader.uniforms.uBurst = uniforms.uBurst
+    if (bakedLights(baked)) shader.fragmentShader = bakeLightShader(shader.fragmentShader)
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
@@ -357,7 +378,8 @@ function dressSnow(
         totalEmissiveRadiance *= smoothstep(0.15, 0.7, uSolid);`,
       )
   }
-  entry.customProgramCacheKey = () => `${priorKey()}-igloo-v16`
+  const bakedKey = bakedLights(baked) ? '-baked' : ''
+  entry.customProgramCacheKey = () => `${priorKey()}-igloo-v16${bakedKey}`
   solidUniforms.push(uniforms.uSolid)
   burstUniforms.push(uniforms.uBurst)
   shared.set('snow', entry)
@@ -365,10 +387,10 @@ function dressSnow(
 }
 
 /**
- * Twelve edges of one brick. Nodes carry translation only, so the course frame
- * is the brick's radial / up / tangent. PCA on crack vertices tipped the boxes.
+ * Twelve edges of the brick's oriented box. PCA on the vertices supplies the axes,
+ * so a tilted course still draws as a box instead of a convex tangle.
  */
-function brickEdges(geometry: BufferGeometry, base: Vector3) {
+function brickEdges(geometry: BufferGeometry) {
   const position = geometry.getAttribute('position')
   const lines = new LineSegmentsGeometry()
   if (!position || position.count < 4) {
@@ -389,7 +411,24 @@ function brickEdges(geometry: BufferGeometry, base: Vector3) {
   cx /= used
   cy /= used
   cz /= used
-  const axes = courseAxes(base)
+  let xx = 0
+  let yy = 0
+  let zz = 0
+  let xy = 0
+  let xz = 0
+  let yz = 0
+  for (let i = 0; i < position.count; i += step) {
+    const x = position.getX(i) - cx
+    const y = position.getY(i) - cy
+    const z = position.getZ(i) - cz
+    xx += x * x
+    yy += y * y
+    zz += z * z
+    xy += x * y
+    xz += x * z
+    yz += y * z
+  }
+  const axes = principalAxes(xx, yy, zz, xy, xz, yz)
   const samples: number[][] = [[], [], []]
   for (let i = 0; i < position.count; i += 1) {
     const x = position.getX(i) - cx
@@ -408,8 +447,7 @@ function brickEdges(geometry: BufferGeometry, base: Vector3) {
     const lo = quantile(values, 0.1)
     const hi = quantile(values, 0.9)
     const mid = (lo + hi) * 0.5
-    // 0.8 keeps neighbouring courses from crossing. The volume cap catches the rest.
-    const half = (hi - lo) * 0.5 * 0.8
+    const half = (hi - lo) * 0.5 * 0.88
     min[k] = mid - half
     max[k] = mid + half
   }
@@ -534,16 +572,70 @@ function quantile(values: number[], p: number) {
   return (sorted[lo] ?? 0) * (1 - t) + (sorted[hi] ?? 0) * t
 }
 
-/** Horizontal course: tangent across the wall, up, and the outward radial. */
-function courseAxes(base: Vector3) {
-  const radial = new Vector3(base.x, 0, base.z)
-  if (radial.lengthSq() < 1e-6) radial.set(1, 0, 0)
-  else radial.normalize()
-  const up = new Vector3(0, 1, 0)
-  const tangent = new Vector3().crossVectors(up, radial).normalize()
-  return [tangent, up, radial]
+/** Symmetric 3x3 Jacobi. Returns an orthonormal frame, longest axis first. */
+function principalAxes(xx: number, yy: number, zz: number, xy: number, xz: number, yz: number) {
+  const a = new Float64Array([xx, xy, xz, xy, yy, yz, xz, yz, zz])
+  const v = new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1])
+  for (let iter = 0; iter < 16; iter += 1) {
+    let p = 0
+    let q = 1
+    let max = Math.abs(a[1] ?? 0)
+    if (Math.abs(a[2] ?? 0) > max) {
+      p = 0
+      q = 2
+      max = Math.abs(a[2] ?? 0)
+    }
+    if (Math.abs(a[5] ?? 0) > max) {
+      p = 1
+      q = 2
+      max = Math.abs(a[5] ?? 0)
+    }
+    if (max < 1e-12) break
+    const app = a[p * 3 + p] ?? 0
+    const aqq = a[q * 3 + q] ?? 0
+    const apq = a[p * 3 + q] ?? 0
+    const tau = (aqq - app) / (2 * apq || 1e-20)
+    const sign = tau < 0 ? -1 : 1
+    const t = sign / (Math.abs(tau) + Math.sqrt(1 + tau * tau))
+    const c = 1 / Math.sqrt(1 + t * t)
+    const s = t * c
+    for (let k = 0; k < 3; k += 1) {
+      if (k === p || k === q) continue
+      const aik = a[p * 3 + k] ?? 0
+      const aqk = a[q * 3 + k] ?? 0
+      const nik = c * aik - s * aqk
+      const nqk = s * aik + c * aqk
+      a[p * 3 + k] = nik
+      a[k * 3 + p] = nik
+      a[q * 3 + k] = nqk
+      a[k * 3 + q] = nqk
+    }
+    a[p * 3 + p] = c * c * app - 2 * s * c * apq + s * s * aqq
+    a[q * 3 + q] = s * s * app + 2 * s * c * apq + c * c * aqq
+    a[p * 3 + q] = 0
+    a[q * 3 + p] = 0
+    for (let k = 0; k < 3; k += 1) {
+      const vip = v[k * 3 + p] ?? 0
+      const viq = v[k * 3 + q] ?? 0
+      v[k * 3 + p] = c * vip - s * viq
+      v[k * 3 + q] = s * vip + c * viq
+    }
+  }
+  const order = [0, 1, 2].sort((i, j) => Math.abs(a[j * 3 + j] ?? 0) - Math.abs(a[i * 3 + i] ?? 0))
+  const first = order[0] ?? 0
+  const x = new Vector3(v[first] ?? 1, v[3 + first] ?? 0, v[6 + first] ?? 0).normalize()
+  if (x.lengthSq() < 1e-8) x.set(1, 0, 0)
+  const second = order[1] ?? 1
+  const y = new Vector3(v[second] ?? 0, v[3 + second] ?? 1, v[6 + second] ?? 0)
+  y.addScaledVector(x, -y.dot(x))
+  if (y.lengthSq() < 1e-8) {
+    const helper = Math.abs(x.y) < 0.9 ? new Vector3(0, 1, 0) : new Vector3(1, 0, 0)
+    y.crossVectors(helper, x)
+  }
+  y.normalize()
+  const z = new Vector3().crossVectors(x, y).normalize()
+  return [x, y, z]
 }
-
 
 /** Faint plan grid under the dome, the same idea as the build 23 ground guides. */
 function groundGrid() {

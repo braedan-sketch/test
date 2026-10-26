@@ -111,51 +111,21 @@ function dressPortal(root: Group, quality: Quality) {
     }
     const material = object.material
     if (!(material instanceof MeshStandardMaterial)) return
-    // Wisps stay, but the stone picks up a frosty sheen instead of matte plaster.
-    material.emissiveIntensity = 0.4
+    material.emissiveIntensity = 0.55
     material.metalness = 0
-    material.envMapIntensity = 0.48
-    material.normalScale.set(1.15, 1.15)
+    material.envMapIntensity = 0.16
+    material.normalScale.set(0.72, 0.72)
     material.fog = true
     material.toneMapped = true
-    frostStone(material)
     // v8 is 65k tris. Skip the shadow map so the portal can stay at DPR 2.
     object.castShadow = false
     object.receiveShadow = quality.shadows
   })
 }
 
-/** Roughness patches in the stone's own space, so the sheen does not slide with the camera. */
-function frostStone(material: MeshStandardMaterial) {
-  if (material.userData.blendyStone === true) return
-  material.userData.blendyStone = true
-  const prior = material.onBeforeCompile
-  const priorKey = material.customProgramCacheKey.bind(material)
-  material.onBeforeCompile = (shader, renderer) => {
-    prior.call(material, shader, renderer)
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vStone;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvStone = transformed;')
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vStone;')
-      .replace(
-        '#include <roughnessmap_fragment>',
-        `#include <roughnessmap_fragment>
-        {
-          vec2 cell = vStone.xz * 3.4;
-          float n = fract(sin(dot(floor(cell), vec2(127.1, 311.7))) * 43758.5453);
-          float m = fract(sin(dot(floor(cell * 0.45 + 2.0), vec2(269.5, 183.3))) * 43758.5453);
-          roughnessFactor = mix(0.22, 0.72, n * 0.6 + m * 0.4);
-        }`,
-      )
-  }
-  material.customProgramCacheKey = () => `${priorKey()}-portal-stone-v11`
-}
-
 /**
- * Frost is a single baked disc. The old shader looped 110 scratches per pixel
- * and those strokes were under a pixel wide, so the portal missed 60 fps and
- * the frost vanished at DPR 1.
+ * One texture sample instead of 110 scratches per pixel. That loop was the
+ * rings frame drop. The stroke look is unchanged on purpose.
  */
 function latticeDisc() {
   const material = new MeshBasicMaterial({

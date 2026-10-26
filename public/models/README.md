@@ -109,3 +109,35 @@ CRYSTAL
   - The broad flares show only as a faint blue glow across the gap. Theirs are brighter, wispier flares over the stone.
   - The stone still reads as soft clay/foam, not their crisp carved stone.
   - Our scene is darker and bluer than their pale frosted look overall.
+
+## handoff_hero_v1 (baked hero, `?baked=1`)
+
+Drop files in `public/models/hero/`. The page only reads them when the URL has `?baked=1`. Until the files exist, that flag keeps the realtime igloo and terrain.
+
+Optional `hero.json` names the files. Without it, the loader probes the defaults. Paths are relative to this folder unless they start with `/`. Every map is KTX2.
+
+```json
+{
+  "igloo": {
+    "model": "igloo.glb",
+    "light": "igloo_light.ktx2",
+    "ao": "igloo_ao.ktx2",
+    "seam": "igloo_seam.ktx2",
+    "albedo": "igloo_albedo.ktx2",
+    "lightIntensity": 1,
+    "aoIntensity": 1
+  },
+  "terrain": {
+    "light": "terrain_light.ktx2",
+    "ao": "terrain_ao.ktx2",
+    "albedo": "terrain_albedo.ktx2"
+  }
+}
+```
+
+- `light` is Cycles illuminance on UV2 (`TEXCOORD_1`). Linear. It replaces the sun, the hemisphere, and the environment on that material.
+- `ao` is UV2, red channel, linear.
+- `seam` is the emissive mask, UV0, linear. The realtime seam curve, burst fade, and bloom stay on top of it. Do not bake the glow into the lightmap and stop there.
+- `albedo` is base color, UV0, sRGB. Leave it out when the lightmap is the only new bake. Do not also paint the lighting into the albedo if `light` is present.
+- `model` is optional. An igloo override still needs one mesh per brick, translation only, and extras `row` / `t` / `kind` / `bidx`, so the blocks can separate. Identity transform, same as the current glb. Terrain stays in the same place as `/models/terrain.glb`.
+- Channels default to UV2 for light and AO, UV0 for seam and albedo. `lightChannel`, `aoChannel`, `seamChannel`, and `albedoChannel` override them (`0`, `1`, or `2`).
