@@ -2,7 +2,6 @@ import {
   BackSide,
   BufferGeometry,
   Color,
-  EdgesGeometry,
   Group,
   Mesh,
   MeshBasicMaterial,
@@ -13,7 +12,6 @@ import {
   type Object3D,
   type WebGLRenderer,
 } from 'three'
-import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js'
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
@@ -32,8 +30,11 @@ const LABEL_OFFSETS: Array<[number, number]> = [
   [-148, 6],
 ]
 
-/** v14 preview emissive is 2.4. The seam tint is already blue; the shader only lifts the gaps. */
-const EMISSIVE_INTENSITY = 2.4
+/**
+ * Build 34's seam curve, on the calmer v14 bake. 2.85 was tuned for the hotter v13 map;
+ * 3.6 puts that same curve back over 235. Faces are scaled separately, below.
+ */
+const EMISSIVE_INTENSITY = 3.6
 
 export type LabelAnchor = {
   position: Vector3
@@ -127,11 +128,12 @@ export async function loadIgloo(
     const node = blockCarrier(object)
     const extras = readExtras(node.userData)
     object.material = dressSnow(object.material, shared, solidUniforms, burstUniforms, renderer)
+    object.userData.iglooFace = true
 
     if (seen.has(node)) return
     seen.add(node)
     const base = node.position.clone()
-    const outline = brickEdges(object.geometry, extras.row)
+    const outline = brickEdges(object.geometry)
     wireCounts.push(outline.count)
     if (outline.hull) hulls += 1
     const wire = new LineSegments2(outline.geometry, wireMaterial)
@@ -292,11 +294,11 @@ function dressSnow(
   const existing = shared.get('snow')
   if (existing) return existing
   const entry = source.clone()
-  // v14 is already murky. A small scale pulls face luma toward the darker ice without killing the veins.
-  entry.color.multiplyScalar(0.78)
+  // Faces only. The seam lives in the emissive map, so this does not dim the gaps.
+  entry.color.multiplyScalar(0.66)
   entry.emissive.setRGB(1, 1, 1)
   entry.emissiveIntensity = EMISSIVE_INTENSITY
-  entry.normalScale.set(0.85, 0.85)
+  entry.normalScale.set(0.62, 0.62)
   const anisotropy = renderer.capabilities.getMaxAnisotropy()
   for (const map of [entry.map, entry.normalMap, entry.roughnessMap, entry.aoMap, entry.emissiveMap, entry.metalnessMap]) {
     if (!map) continue
@@ -306,7 +308,8 @@ function dressSnow(
   entry.metalness = 0
   entry.envMapIntensity = 0.08
   entry.toneMapped = true
-  entry.fog = true
+  // Field fog stays on the mountains. The igloo is the sharp subject in front of it.
+  entry.fog = false
   // Hidden until the solid fade. A visible mesh here casts the black disc
   // under the dome on the first frame after the loader.
   entry.transparent = true
@@ -331,89 +334,185 @@ function dressSnow(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
         #ifdef USE_EMISSIVEMAP
-          vec2 seamDx = dFdx(vEmissiveMapUv) * 2.4;
-          vec2 seamDy = dFdy(vEmissiveMapUv) * 2.4;
-          vec3 seamWide = emissive * texture2D(emissiveMap, vEmissiveMapUv + seamDx).rgb;
+          vec2 seamDx = dFdx(vEmissiveMapUv) * 1.8;
+          vec2 seamDy = dFdy(vEmissiveMapUv) * 1.8;
+          vec3 seamWide = totalEmissiveRadiance;
+          seamWide = max(seamWide, emissive * texture2D(emissiveMap, vEmissiveMapUv + seamDx).rgb);
           seamWide = max(seamWide, emissive * texture2D(emissiveMap, vEmissiveMapUv - seamDx).rgb);
           seamWide = max(seamWide, emissive * texture2D(emissiveMap, vEmissiveMapUv + seamDy).rgb);
           seamWide = max(seamWide, emissive * texture2D(emissiveMap, vEmissiveMapUv - seamDy).rgb);
-          totalEmissiveRadiance = max(totalEmissiveRadiance, seamWide);
+          totalEmissiveRadiance = seamWide;
         #endif
         float seam = max(totalEmissiveRadiance.r, max(totalEmissiveRadiance.g, totalEmissiveRadiance.b));
-        float gap = smoothstep(0.55, 1.2, seam);
-        totalEmissiveRadiance *= mix(0.7, 1.65, gap);
-        float hot = smoothstep(2.7, 3.8, seam * mix(0.7, 1.65, gap));
-        totalEmissiveRadiance *= mix(1.0, 0.8, hot);
+        float gap = smoothstep(0.85, 1.55, seam);
+        totalEmissiveRadiance *= mix(0.82, 1.7, gap);
+        float hot = smoothstep(3.05, 4.3, seam * mix(0.82, 1.7, gap));
+        totalEmissiveRadiance *= mix(1.0, 0.74, hot);
         totalEmissiveRadiance *= 1.0 - smoothstep(0.0, 0.28, uBurst);
         totalEmissiveRadiance *= smoothstep(0.15, 0.7, uSolid);`,
       )
   }
-  entry.customProgramCacheKey = () => `${priorKey()}-igloo-v15`
+  entry.customProgramCacheKey = () => `${priorKey()}-igloo-v16`
   solidUniforms.push(uniforms.uSolid)
   burstUniforms.push(uniforms.uBurst)
   shared.set('snow', entry)
   return entry
 }
 
-type OutlineEdge = { ax: number; ay: number; az: number; bx: number; by: number; bz: number; len: number }
-
 /**
- * Outline of a coarse convex proxy, in the mesh's own space.
- * A few spread vertices make a block, not the cracked surface.
- * EdgesGeometry at 40° then drops the short fragments.
+ * Twelve edges of the brick's oriented box. PCA on the vertices supplies the axes,
+ * so a tilted course still draws as a box instead of a convex tangle.
  */
-function brickEdges(geometry: BufferGeometry, row: number) {
-  const crown = row >= 3
-  const hull = convexProxy(geometry)
-  const source = hull ?? geometry
-  let edges = collectEdges(source, hull ? 40 : 62, 0.05)
-  if (hull && (edges.length < 8 || edges.length > 22)) {
-    const tighter = collectEdges(source, edges.length > 22 ? 58 : 26, 0.04)
-    if (tighter.length >= 8 && tighter.length <= 22) edges = tighter
-  }
-  const cap = crown ? (row >= 4 ? 8 : 12) : 20
-  if (edges.length > cap) edges = edges.slice(0, cap)
-  if (crown) shrinkEdges(edges, row >= 4 ? 0.8 : 0.9)
-  hull?.dispose()
-  const data = new Float32Array(Math.max(1, edges.length) * 6)
-  for (let i = 0; i < edges.length; i += 1) {
-    const edge = edges[i]
-    if (!edge) continue
-    data[i * 6] = edge.ax
-    data[i * 6 + 1] = edge.ay
-    data[i * 6 + 2] = edge.az
-    data[i * 6 + 3] = edge.bx
-    data[i * 6 + 4] = edge.by
-    data[i * 6 + 5] = edge.bz
-  }
+function brickEdges(geometry: BufferGeometry) {
+  const position = geometry.getAttribute('position')
   const lines = new LineSegmentsGeometry()
-  lines.setPositions(data)
-  return { geometry: lines, count: edges.length, hull: hull != null }
-}
-
-function shrinkEdges(edges: OutlineEdge[], scale: number) {
-  if (edges.length === 0) return
+  if (!position || position.count < 4) {
+    lines.setPositions(new Float32Array(6))
+    return { geometry: lines, count: 0, hull: false }
+  }
+  const step = Math.max(1, Math.floor(position.count / 4000))
   let cx = 0
   let cy = 0
   let cz = 0
-  for (const edge of edges) {
-    cx += edge.ax + edge.bx
-    cy += edge.ay + edge.by
-    cz += edge.az + edge.bz
+  let used = 0
+  for (let i = 0; i < position.count; i += step) {
+    cx += position.getX(i)
+    cy += position.getY(i)
+    cz += position.getZ(i)
+    used += 1
   }
-  const count = edges.length * 2
-  cx /= count
-  cy /= count
-  cz /= count
-  for (const edge of edges) {
-    edge.ax = cx + (edge.ax - cx) * scale
-    edge.ay = cy + (edge.ay - cy) * scale
-    edge.az = cz + (edge.az - cz) * scale
-    edge.bx = cx + (edge.bx - cx) * scale
-    edge.by = cy + (edge.by - cy) * scale
-    edge.bz = cz + (edge.bz - cz) * scale
+  cx /= used
+  cy /= used
+  cz /= used
+  let xx = 0
+  let yy = 0
+  let zz = 0
+  let xy = 0
+  let xz = 0
+  let yz = 0
+  for (let i = 0; i < position.count; i += step) {
+    const x = position.getX(i) - cx
+    const y = position.getY(i) - cy
+    const z = position.getZ(i) - cz
+    xx += x * x
+    yy += y * y
+    zz += z * z
+    xy += x * y
+    xz += x * z
+    yz += y * z
   }
+  const axes = principalAxes(xx, yy, zz, xy, xz, yz)
+  const min = [Infinity, Infinity, Infinity]
+  const max = [-Infinity, -Infinity, -Infinity]
+  for (let i = 0; i < position.count; i += 1) {
+    const x = position.getX(i) - cx
+    const y = position.getY(i) - cy
+    const z = position.getZ(i) - cz
+    for (let k = 0; k < 3; k += 1) {
+      const axis = axes[k]
+      if (!axis) continue
+      const t = x * axis.x + y * axis.y + z * axis.z
+      min[k] = Math.min(min[k] ?? Infinity, t)
+      max[k] = Math.max(max[k] ?? -Infinity, t)
+    }
+  }
+  const corners: Vector3[] = []
+  for (let mask = 0; mask < 8; mask += 1) {
+    const point = new Vector3(cx, cy, cz)
+    for (let k = 0; k < 3; k += 1) {
+      const axis = axes[k]
+      if (!axis) continue
+      point.addScaledVector(axis, (mask & (1 << k)) !== 0 ? (max[k] ?? 0) : (min[k] ?? 0))
+    }
+    corners.push(point)
+  }
+  const data = new Float32Array(12 * 6)
+  let edge = 0
+  for (let a = 0; a < 8; a += 1) {
+    for (let k = 0; k < 3; k += 1) {
+      const b = a | (1 << k)
+      if (b === a) continue
+      const pa = corners[a]
+      const pb = corners[b]
+      if (!pa || !pb) continue
+      data[edge * 6] = pa.x
+      data[edge * 6 + 1] = pa.y
+      data[edge * 6 + 2] = pa.z
+      data[edge * 6 + 3] = pb.x
+      data[edge * 6 + 4] = pb.y
+      data[edge * 6 + 5] = pb.z
+      edge += 1
+    }
+  }
+  lines.setPositions(data)
+  return { geometry: lines, count: edge, hull: true }
 }
+
+/** Symmetric 3x3 Jacobi. Returns an orthonormal frame, longest axis first. */
+function principalAxes(xx: number, yy: number, zz: number, xy: number, xz: number, yz: number) {
+  const a = new Float64Array([xx, xy, xz, xy, yy, yz, xz, yz, zz])
+  const v = new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1])
+  for (let iter = 0; iter < 16; iter += 1) {
+    let p = 0
+    let q = 1
+    let max = Math.abs(a[1] ?? 0)
+    if (Math.abs(a[2] ?? 0) > max) {
+      p = 0
+      q = 2
+      max = Math.abs(a[2] ?? 0)
+    }
+    if (Math.abs(a[5] ?? 0) > max) {
+      p = 1
+      q = 2
+      max = Math.abs(a[5] ?? 0)
+    }
+    if (max < 1e-12) break
+    const app = a[p * 3 + p] ?? 0
+    const aqq = a[q * 3 + q] ?? 0
+    const apq = a[p * 3 + q] ?? 0
+    const tau = (aqq - app) / (2 * apq || 1e-20)
+    const sign = tau < 0 ? -1 : 1
+    const t = sign / (Math.abs(tau) + Math.sqrt(1 + tau * tau))
+    const c = 1 / Math.sqrt(1 + t * t)
+    const s = t * c
+    for (let k = 0; k < 3; k += 1) {
+      if (k === p || k === q) continue
+      const aik = a[p * 3 + k] ?? 0
+      const aqk = a[q * 3 + k] ?? 0
+      const nik = c * aik - s * aqk
+      const nqk = s * aik + c * aqk
+      a[p * 3 + k] = nik
+      a[k * 3 + p] = nik
+      a[q * 3 + k] = nqk
+      a[k * 3 + q] = nqk
+    }
+    a[p * 3 + p] = c * c * app - 2 * s * c * apq + s * s * aqq
+    a[q * 3 + q] = s * s * app + 2 * s * c * apq + c * c * aqq
+    a[p * 3 + q] = 0
+    a[q * 3 + p] = 0
+    for (let k = 0; k < 3; k += 1) {
+      const vip = v[k * 3 + p] ?? 0
+      const viq = v[k * 3 + q] ?? 0
+      v[k * 3 + p] = c * vip - s * viq
+      v[k * 3 + q] = s * vip + c * viq
+    }
+  }
+  const order = [0, 1, 2].sort((i, j) => Math.abs(a[j * 3 + j] ?? 0) - Math.abs(a[i * 3 + i] ?? 0))
+  const first = order[0] ?? 0
+  const x = new Vector3(v[first] ?? 1, v[3 + first] ?? 0, v[6 + first] ?? 0).normalize()
+  if (x.lengthSq() < 1e-8) x.set(1, 0, 0)
+  const second = order[1] ?? 1
+  const y = new Vector3(v[second] ?? 0, v[3 + second] ?? 1, v[6 + second] ?? 0)
+  y.addScaledVector(x, -y.dot(x))
+  if (y.lengthSq() < 1e-8) {
+    const helper = Math.abs(x.y) < 0.9 ? new Vector3(0, 1, 0) : new Vector3(1, 0, 0)
+    y.crossVectors(helper, x)
+  }
+  y.normalize()
+  const z = new Vector3().crossVectors(x, y).normalize()
+  return [x, y, z]
+}
+
 
 /** Faint plan grid under the dome, the same idea as the build 23 ground guides. */
 function groundGrid() {
@@ -444,117 +543,6 @@ function groundGrid() {
   lines.renderOrder = 1
   lines.frustumCulled = false
   return { lines, material }
-}
-
-function convexProxy(geometry: BufferGeometry) {
-  const position = geometry.getAttribute('position')
-  if (!position || position.count < 4) return null
-  const points = proxyPoints(position)
-  if (points.length < 4) return null
-  try {
-    const hull = new ConvexGeometry(points)
-    const built = hull.getAttribute('position')
-    if (!built || built.count < 9) {
-      hull.dispose()
-      return null
-    }
-    return hull
-  } catch {
-    return null
-  }
-}
-
-/** Farthest-point sample so the hull is a block, not a wrinkled copy of the cracks. */
-function proxyPoints(position: BufferGeometry['attributes']['position']) {
-  const pool: Vector3[] = []
-  const stride = Math.max(1, Math.floor(position.count / 320))
-  let minX = Infinity
-  let maxX = -Infinity
-  let minY = Infinity
-  let maxY = -Infinity
-  let minZ = Infinity
-  let maxZ = -Infinity
-  const corners = [new Vector3(), new Vector3(), new Vector3(), new Vector3(), new Vector3(), new Vector3()]
-  for (let i = 0; i < position.count; i += 1) {
-    const x = position.getX(i)
-    const y = position.getY(i)
-    const z = position.getZ(i)
-    if (i % stride === 0) pool.push(new Vector3(x, y, z))
-    if (x < minX) {
-      minX = x
-      corners[0]?.set(x, y, z)
-    }
-    if (x > maxX) {
-      maxX = x
-      corners[1]?.set(x, y, z)
-    }
-    if (y < minY) {
-      minY = y
-      corners[2]?.set(x, y, z)
-    }
-    if (y > maxY) {
-      maxY = y
-      corners[3]?.set(x, y, z)
-    }
-    if (z < minZ) {
-      minZ = z
-      corners[4]?.set(x, y, z)
-    }
-    if (z > maxZ) {
-      maxZ = z
-      corners[5]?.set(x, y, z)
-    }
-  }
-  for (const corner of corners) pool.push(corner.clone())
-  const first = pool[0]
-  if (!first) return []
-  const target = Math.min(12, pool.length)
-  const chosen: Vector3[] = [first]
-  const nearest = new Float64Array(pool.length).fill(Infinity)
-  while (chosen.length < target) {
-    const last = chosen[chosen.length - 1]
-    if (!last) break
-    let best = 0
-    let bestD = -1
-    for (let i = 0; i < pool.length; i += 1) {
-      const point = pool[i]
-      if (!point) continue
-      const dist = point.distanceToSquared(last)
-      const prev = nearest[i] ?? Infinity
-      if (dist < prev) nearest[i] = dist
-      const score = nearest[i] ?? 0
-      if (score > bestD) {
-        bestD = score
-        best = i
-      }
-    }
-    if (bestD <= 1e-8) break
-    const next = pool[best]
-    if (!next) break
-    chosen.push(next)
-  }
-  return chosen
-}
-
-function collectEdges(geometry: BufferGeometry, angle: number, minLen: number) {
-  const edges = new EdgesGeometry(geometry, angle)
-  const src = edges.getAttribute('position')
-  const picked: OutlineEdge[] = []
-  if (src) {
-    for (let i = 0; i + 1 < src.count; i += 2) {
-      const ax = src.getX(i)
-      const ay = src.getY(i)
-      const az = src.getZ(i)
-      const bx = src.getX(i + 1)
-      const by = src.getY(i + 1)
-      const bz = src.getZ(i + 1)
-      const len = Math.hypot(ax - bx, ay - by, az - bz)
-      if (len >= minLen) picked.push({ ax, ay, az, bx, by, bz, len })
-    }
-  }
-  edges.dispose()
-  picked.sort((a, b) => b.len - a.len)
-  return picked
 }
 
 function summarizeWires(counts: number[], hulls: number): WireStats {

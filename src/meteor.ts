@@ -58,7 +58,8 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
     if (!(object instanceof Mesh)) return
     dressCrystal(object, envMap, quality.low)
   })
-  hero.rotation.y = 0.55
+  // The v6 break is the local +X side. Park it on the camera's front-right, not the back.
+  hero.rotation.y = -0.42
   group.add(hero)
   const anchors = boxAnchors(hero)
 
@@ -69,8 +70,8 @@ export async function createMeteor(quality: Quality, renderer: WebGLRenderer): P
       const shown = Math.max(0, Math.min(1, reveal))
       group.visible = shown > 0.02
       group.scale.setScalar(0.62 + shown * 0.38)
-      hero.rotation.y = 0.55 + time * 0.22
-      hero.rotation.z = Math.sin(time * 0.17) * 0.08
+      hero.rotation.y = -0.42 + Math.sin(time * 0.35) * 0.22
+      hero.rotation.z = Math.sin(time * 0.17) * 0.05
       light.intensity = 1.4 + shown * 2.2
       facet.intensity = shown * 2.6
     },
@@ -118,17 +119,22 @@ function dressCrystal(mesh: Mesh, envMap: Texture, low: boolean) {
   source.ior = 1.45
   source.thickness = shellThickness(mesh, source.thickness)
   // v6 publishes a cool attenuation at 1 m. A light cool base keeps that from going black.
-  source.attenuationColor.setRGB(0.55, 0.64, 0.8, LinearSRGBColorSpace)
-  source.attenuationDistance = 0.95
-  source.color.set('#c5d4e2')
-  source.roughness = 0.4
+  // A short blue attenuation turned the shell cobalt. This stays a low-saturation grey-blue.
+  source.attenuationColor.setRGB(0.86, 0.89, 0.93, LinearSRGBColorSpace)
+  source.attenuationDistance = 1.85
+  source.color.set('#8e9aa3')
+  source.roughness = 0.5
   source.metalness = 0
-  source.normalScale.set(1.05, 1.05)
+  source.normalScale.set(1.8, 1.8)
+  if (source.normalMap) {
+    source.normalMap.colorSpace = NoColorSpace
+    source.normalMap.needsUpdate = true
+  }
   tameGlint(source)
   source.iridescence = 0
   source.dispersion = 0
   source.clearcoat = 0
-  source.specularIntensity = 0.4
+  source.specularIntensity = 0.32
   source.envMap = envMap
   source.envMapIntensity = low ? 0.08 : 0.14
   source.fog = false

@@ -20,6 +20,7 @@ import {
   DirectionalLight,
   HemisphereLight,
   Mesh,
+  MeshBasicMaterial,
   NoToneMapping,
   PCFSoftShadowMap,
   PerspectiveCamera,
@@ -28,6 +29,7 @@ import {
   SRGBColorSpace,
   Vector2,
   Vector3,
+  WebGLRenderTarget,
   WebGLRenderer,
   HalfFloatType,
   Box3,
@@ -58,6 +60,8 @@ declare global {
       scrollProgress: (progress: number) => void
       debug?: () => Record<string, unknown>
       frame?: { ms: number; p50: number; p95: number; fps: number; n: number }
+      measure?: () => Promise<GapMetric | null>
+      metric?: GapMetric | null
     }
     __blendyScrollTo?: (fraction: number) => void
   }
@@ -70,6 +74,15 @@ const CRYSTAL_DIR: readonly [number, number, number] = [0.22, 0.04, 1]
 // Upright bust, base on the ring at y 0, ears near y 2. Look slightly up at the chest.
 const FOX_TARGET: readonly [number, number, number] = [0.0, 1.02, 0.0]
 const FOX_DIR: readonly [number, number, number] = [0.32, -0.12, 1.05]
+type GapMetric = {
+  hot: number
+  faceP40: number
+  iglooPx: number
+  dpr: number
+  width: number
+  height: number
+}
+
 const scratchA = new Vector3()
 const scratchB = new Vector3()
 const poseA = new Vector3()
@@ -258,7 +271,9 @@ export async function startExperience(overlay: Overlay) {
     shotLocks = 0
     scrollToFraction(fraction)
   }
-  const shotQuery = new URLSearchParams(window.location.search).get('shot')
+  const params = new URLSearchParams(window.location.search)
+  const metricOn = params.get('metric') === '1'
+  const shotQuery = params.get('shot')
   const shot = shotQuery == null || shotQuery === '' || !Number.isFinite(Number(shotQuery)) ? null : clamp(Number(shotQuery), 0, 1)
   let shotLocks = shot == null ? 0 : 90
 
@@ -301,11 +316,16 @@ export async function startExperience(overlay: Overlay) {
         wire: igloo?.wireStats ?? null,
       }
     }
+    window.__blendy.measure = () =>
+      new Promise<GapMetric | null>((resolve) => {
+        gapState.pending = resolve
+      })
   }
   const up = new Vector3(0, 1, 0)
   const ndc = new Vector3()
   const clear = new Color('#c5c8cc')
   let igloo: Igloo | null = null
+  const gapState: GapState = { frames: 0, target: null, white: null, black: null, pixels: null, mask: null, pending: null }
   let slots: LabelAnchor[] = []
   const meteorSlots: LabelAnchor[] = makeLabelSlots(meteor.labelCount)
   let ready = false
@@ -416,6 +436,7 @@ export async function startExperience(overlay: Overlay) {
       dof.target = phase.screen === 'field' ? focusPoint : target
       dof.bokehScale = phase.screen === 'field' || phase.screen === 'rift' ? 0 : softGpu ? 0.08 : 0.12
       applyGrade(phase, bloom, chromatic, warp, tone, vignette, frost, camera.aspect)
+      noise.blendMode.setOpacity(phase.screen === 'field' ? 0.04 : 0.12)
       overlay.setFlash(phase.flash * 0.35)
       overlay.setUiDim(phase.screen === 'rings' ? 1 : 1 - phase.burst * 0.04)
       overlay.setScrollProgress(global)
@@ -457,8 +478,9 @@ export async function startExperience(overlay: Overlay) {
       )
 
       composer.render(dt)
+      if (metricOn) noteGap(phase, igloo, scene, camera, renderer, gapState)
       noteFrame(rawDt)
-      adaptFrame(dt)
+      if (!metricOn) adaptFrame(dt)
     }
     requestAnimationFrame(frame)
   }
@@ -895,8 +917,8 @@ function applyGrade(
   const rings = phase.screen === 'rings'
   const heroGlow = phase.screen === 'field' || phase.screen === 'rift'
   frost.setGrade(phase.screen === 'meteor' || figure ? 1 : 0)
-  // v14 faces were already bright at 1.34. A smaller lift keeps the seam highlights.
-  frost.setExposure(phase.screen === 'field' ? 1.1 : 1)
+  // Seams are carried by emissive. Exposure stays at 1 so it does not lift the faces.
+  frost.setExposure(1)
   // The frost edge resample softens the hero, which sits in the right third. The fox does not get it.
   frost.setEdge(phase.screen === 'field' ? 0 : 1)
   if (rings) {
@@ -908,11 +930,11 @@ function applyGrade(
     bloom.luminanceMaterial.threshold = 0.96
     bloom.mipmapBlurPass.radius = 0.08
   } else if (heroGlow) {
-    // Fox stays sharp with almost no bloom. The hero mip radius was the scene-specific blur.
-    bloom.intensity = 0.5
-    bloom.luminanceMaterial.threshold = 0.72
-    bloom.luminanceMaterial.smoothing = 0.04
-    bloom.mipmapBlurPass.radius = 0.03
+    // Enough bloom to catch the seam, with a short radius so the slabs stay crisp.
+    bloom.intensity = 0.72
+    bloom.luminanceMaterial.threshold = 0.66
+    bloom.luminanceMaterial.smoothing = 0.14
+    bloom.mipmapBlurPass.radius = 0.05
   } else {
     bloom.intensity = 0.08
     bloom.luminanceMaterial.threshold = 0.96
@@ -978,7 +1000,23 @@ function projectLabels(
       constellation: slot.constellation === true,
     }
   })
+  if (anchors.length > 0 && anchors.every((slot) => !slot.bent)) pinMarginLabels(views, width, height)
   overlay.updateLabels(views)
+}
+
+/** Hero callouts sit in the left margin. An offset from the block still landed on the dome. */
+function pinMarginLabels(views: ProjectedLabel[], width: number, height: number) {
+  const portrait = height > width
+  const top = height * (portrait ? 0.18 : 0.2)
+  const bottom = height * (portrait ? 0.6 : 0.82)
+  const x = portrait ? 36 : 68
+  const order = views.map((_, index) => index).sort((a, b) => (views[a]?.anchorY ?? 0) - (views[b]?.anchorY ?? 0))
+  order.forEach((index, n) => {
+    const view = views[index]
+    if (!view) return
+    view.labelX = x
+    view.labelY = order.length === 1 ? (top + bottom) / 2 : top + ((bottom - top) * n) / (order.length - 1)
+  })
 }
 
 function softwareGpu(renderer: WebGLRenderer) {
@@ -1036,4 +1074,124 @@ function createEnvironment(renderer: WebGLRenderer) {
     }
   })
   return texture
+}
+
+type GapState = {
+  frames: number
+  target: WebGLRenderTarget | null
+  white: MeshBasicMaterial | null
+  black: MeshBasicMaterial | null
+  pixels: Uint8Array | null
+  mask: Uint8Array | null
+  pending: ((metric: GapMetric | null) => void) | null
+}
+
+/** Share of igloo pixels above 235, from the canvas, plus the face p40 of the rest. */
+function noteGap(
+  phase: Phase,
+  igloo: Igloo | null,
+  scene: Scene,
+  camera: PerspectiveCamera,
+  renderer: WebGLRenderer,
+  state: GapState,
+) {
+  const hero = phase.screen === 'field' && phase.solid > 0.85 && phase.burst < 0.08
+  if (hero) state.frames += 1
+  else state.frames = 0
+  const due = state.pending != null || (hero && state.frames === 1)
+  if (!due || !igloo) return
+  const metric = sampleGap(igloo.group, scene, camera, renderer, state)
+  publishGap(metric)
+  const resolve = state.pending
+  state.pending = null
+  resolve?.(metric)
+}
+
+function publishGap(metric: GapMetric | null) {
+  if (window.__blendy) window.__blendy.metric = metric
+  if (!metric) return
+  let node = document.getElementById('gap-metric')
+  if (!node) {
+    node = document.createElement('div')
+    node.id = 'gap-metric'
+    node.setAttribute(
+      'style',
+      'position:fixed;left:12px;bottom:48px;z-index:40;font:12px/1.45 ui-monospace,monospace;color:#172024;background:rgba(255,255,255,0.9);padding:6px 8px;',
+    )
+    document.body.append(node)
+  }
+  node.textContent = `>235 ${(metric.hot * 100).toFixed(2)}%  face p40 ${metric.faceP40.toFixed(0)}  px ${metric.iglooPx}  dpr ${metric.dpr.toFixed(2)}  ${metric.width}x${metric.height}`
+  console.info('[metric]', node.textContent)
+}
+
+function sampleGap(
+  root: Object3D,
+  scene: Scene,
+  camera: PerspectiveCamera,
+  renderer: WebGLRenderer,
+  state: GapState,
+): GapMetric | null {
+  renderer.setRenderTarget(null)
+  const gl = renderer.getContext()
+  const width = gl.drawingBufferWidth
+  const height = gl.drawingBufferHeight
+  if (width < 2 || height < 2) return null
+  const count = width * height * 4
+  if (!state.pixels || state.pixels.length !== count) state.pixels = new Uint8Array(count)
+  if (!state.mask || state.mask.length !== count) state.mask = new Uint8Array(count)
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, state.pixels)
+
+  if (!state.white) state.white = new MeshBasicMaterial({ color: '#ffffff', fog: false, toneMapped: false })
+  if (!state.black) state.black = new MeshBasicMaterial({ color: '#000000', fog: false, toneMapped: false })
+  if (!state.target || state.target.width !== width || state.target.height !== height) {
+    state.target?.dispose()
+    state.target = new WebGLRenderTarget(width, height)
+  }
+  const saved: Array<{ mesh: Mesh; material: Mesh['material'] }> = []
+  root.traverse((object) => {
+    if (!(object instanceof Mesh) || !object.visible) return
+    saved.push({ mesh: object, material: object.material })
+    object.material = object.userData.iglooFace === true ? state.white! : state.black!
+  })
+  scene.traverse((object) => {
+    if (!(object instanceof Mesh) || !object.visible || object.userData.iglooFace === true) return
+    if (saved.some((entry) => entry.mesh === object)) return
+    saved.push({ mesh: object, material: object.material })
+    object.material = state.black!
+  })
+  const clear = new Color()
+  const alpha = renderer.getClearAlpha()
+  renderer.getClearColor(clear)
+  renderer.setClearColor('#000000', 1)
+  renderer.setRenderTarget(state.target)
+  renderer.render(scene, camera)
+  renderer.readRenderTargetPixels(state.target, 0, 0, width, height, state.mask)
+  renderer.setRenderTarget(null)
+  renderer.setClearColor(clear, alpha)
+  for (const entry of saved) entry.mesh.material = entry.material
+
+  let iglooPx = 0
+  let hotPx = 0
+  const faces: number[] = []
+  const pixels = state.pixels
+  const mask = state.mask
+  for (let i = 0; i < width * height; i += 1) {
+    if (mask[i * 4]! < 128) continue
+    iglooPx += 1
+    const r = pixels[i * 4]!
+    const g = pixels[i * 4 + 1]!
+    const b = pixels[i * 4 + 2]!
+    if (Math.max(r, g, b) > 235) hotPx += 1
+    else faces.push(r * 0.2126 + g * 0.7152 + b * 0.0722)
+  }
+  faces.sort((a, b) => a - b)
+  const faceP40 = faces[Math.floor(faces.length * 0.4)] ?? 0
+  return {
+    hot: iglooPx ? hotPx / iglooPx : 0,
+    faceP40,
+    iglooPx,
+    dpr: renderer.getPixelRatio(),
+    width,
+    height,
+  }
 }

@@ -120,8 +120,7 @@ function dressPortal(root: Group, quality: Quality) {
 }
 
 /**
- * Frost strokes in the disc's own plane. The baked map is too faint to survive
- * on the M2, and gating the lines on that map made the centre a flat grey.
+ * Sparse frost scratches. The disc itself stays clear: a filled grid read as a cream window.
  */
 function latticeDisc() {
   const material = new MeshBasicMaterial({
@@ -133,36 +132,48 @@ function latticeDisc() {
     side: DoubleSide,
     fog: false,
     toneMapped: false,
-    blending: AdditiveBlending,
   })
   material.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vLattice;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLattice = transformed;')
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vLattice;')
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec3 vLattice;
+        float hash11(float n) {
+          return fract(sin(n * 127.1) * 43758.5453);
+        }`,
+      )
       .replace(
         '#include <opaque_fragment>',
         `#include <opaque_fragment>
         {
           vec2 p = vLattice.xy;
           float radius = length(p);
-          float disc = (1.0 - smoothstep(1.18, 1.48, radius));
-          vec2 g = p * 4.4;
-          vec2 f = abs(fract(g) - 0.5);
-          float d = min(min(f.x, f.y), min(abs(fract(g.x + g.y) - 0.5), abs(fract(g.x - g.y) - 0.5)));
-          float stroke = 1.0 - smoothstep(0.02, 0.055, d);
-          vec2 g2 = p * 2.1 + vec2(0.17, 0.09);
-          vec2 f2 = abs(fract(g2) - 0.5);
-          float d2 = min(min(f2.x, f2.y), min(abs(fract(g2.x + g2.y) - 0.5), abs(fract(g2.x - g2.y) - 0.5)));
-          float stroke2 = 1.0 - smoothstep(0.022, 0.06, d2);
-          float line = max(stroke, stroke2 * 0.8);
-          gl_FragColor.rgb = vec3(0.62, 0.78, 1.0);
-          gl_FragColor.a = disc * line * 0.85;
+          float disc = 1.0 - smoothstep(1.22, 1.46, radius);
+          float scratch = 0.0;
+          for (int i = 0; i < 14; i++) {
+            float seed = float(i) + 1.0;
+            float ang = hash11(seed * 3.1) * 6.28318;
+            vec2 dir = vec2(cos(ang), sin(ang));
+            vec2 origin = vec2(hash11(seed * 5.7), hash11(seed * 8.3)) * 2.2 - 1.1;
+            vec2 rel = p - origin;
+            float along = dot(rel, dir);
+            float across = abs(dot(rel, vec2(-dir.y, dir.x)));
+            float halfLen = 0.18 + hash11(seed * 2.2) * 0.62;
+            float alongMask = 1.0 - smoothstep(halfLen * 0.72, halfLen, abs(along));
+            float width = 0.0035 + hash11(seed * 4.4) * 0.004;
+            float acrossMask = 1.0 - smoothstep(width, width * 2.4, across);
+            scratch = max(scratch, alongMask * acrossMask);
+          }
+          gl_FragColor.rgb = vec3(0.78, 0.84, 0.9);
+          gl_FragColor.a = disc * scratch * 0.72;
         }`,
       )
   }
-  material.customProgramCacheKey = () => 'lattice-disc-v8'
+  material.customProgramCacheKey = () => 'lattice-disc-v9'
   return material
 }
 
