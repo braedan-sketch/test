@@ -135,7 +135,7 @@ export async function loadIgloo(
     const node = blockCarrier(object)
     const extras = readExtras(node.userData)
     object.material = dressSnow(object.material, shared, solidUniforms, burstUniforms, renderer, slot)
-    if (!missingUv && slot?.light && !object.geometry.getAttribute('uv1')) {
+    if (!missingUv && slot?.light && readKind(object.userData) && !object.geometry.getAttribute('uv1')) {
       missingUv = true
       console.warn('[baked] igloo lightmap expects UV2 (glTF TEXCOORD_1). This mesh has no uv1.')
     }
