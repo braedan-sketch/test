@@ -116,7 +116,7 @@ function dressPortal(root: Group, quality: Quality) {
   })
 }
 
-/** v5's lattice is already milky (alpha about 0.40–0.75). Keep that variation. */
+/** v5's lattice is a milky bake. Draw it unlit so the frost is not lost in the stone lighting. */
 function latticeDisc(source: Material | Material[]) {
   const entry = Array.isArray(source) ? source[0] : source
   const map =
@@ -125,22 +125,21 @@ function latticeDisc(source: Material | Material[]) {
     map.colorSpace = SRGBColorSpace
     map.needsUpdate = true
   }
-  const material = new MeshStandardMaterial({
+  const material = new MeshBasicMaterial({
     map: map ?? undefined,
-    color: '#d5e2ec',
-    roughness: 0.62,
-    metalness: 0,
+    color: '#e7eef3',
     transparent: true,
     opacity: 1,
     depthWrite: false,
     side: DoubleSide,
     fog: true,
+    toneMapped: true,
   })
   material.onBeforeCompile = (shader) => {
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <map_fragment>',
       `#include <map_fragment>
-       diffuseColor.a = clamp(diffuseColor.a * 1.06 + 0.02, 0.0, 0.9);`,
+       diffuseColor.a = clamp(diffuseColor.a * 1.2 + 0.08, 0.0, 0.88);`,
     )
   }
   material.customProgramCacheKey = () => 'lattice-disc-v5'

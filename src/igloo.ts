@@ -1,8 +1,9 @@
 import {
+  BackSide,
   BufferGeometry,
   Color,
   EdgesGeometry,
-  FrontSide,
+  Float32BufferAttribute,
   Group,
   LineBasicMaterial,
   LineSegments,
@@ -155,20 +156,20 @@ export async function loadIgloo(
   innerLights[2]?.position.set(-0.22, 0.42, -0.08)
   for (const light of innerLights) group.add(light)
   const cavity = new Mesh(
-    new SphereGeometry(0.96, 28, 18),
+    new SphereGeometry(1.48, 32, 20),
     new MeshBasicMaterial({
-      color: new Color().setRGB(5.5, 6.1, 6.8),
+      color: new Color().setRGB(7.2, 7.8, 8.6),
       toneMapped: false,
       fog: false,
-      side: FrontSide,
+      side: BackSide,
       transparent: true,
       opacity: 0,
       depthWrite: false,
     }),
   )
   cavity.name = 'igloo-core'
-  cavity.position.set(0, 0.78, 0)
-  cavity.scale.set(1.08, 0.86, 1)
+  cavity.position.set(0, 1.16, -0.02)
+  cavity.scale.set(1.18, 0.72, 1.12)
   group.add(cavity)
   const cavityMaterial = cavity.material
   const snowMaterials = [...shared.values()]
@@ -186,8 +187,8 @@ export async function loadIgloo(
       group.visible = dissolve < 0.985
       const present = smoother(clamp(solid * 1.15, 0, 1)) * (1 - smoother(dissolve))
       const flood = present * (1 - smoother(burst))
-      gapLight.intensity = flood * 6
-      const gains = [22, 14, 11]
+      gapLight.intensity = flood * 1.6
+      const gains = [3.2, 2.1, 1.4]
       innerLights.forEach((light, index) => {
         light.intensity = flood * (gains[index] ?? 8)
       })
@@ -291,11 +292,19 @@ function dressSnow(
         uniform float uBurst;`,
       )
       .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        {
+          float rim = max(diffuseColor.r, max(diffuseColor.g, diffuseColor.b));
+          diffuseColor.rgb *= mix(1.0, 0.22, smoothstep(0.5, 0.82, rim));
+        }`,
+      )
+      .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
         float seam = max(totalEmissiveRadiance.r, max(totalEmissiveRadiance.g, totalEmissiveRadiance.b));
-        float band = smoothstep(1.05, 2.5, seam);
-        totalEmissiveRadiance *= mix(0.18, 0.04, band);
+        float band = smoothstep(0.85, 2.2, seam);
+        totalEmissiveRadiance *= mix(0.12, 0.0, band);
         totalEmissiveRadiance *= 1.0 - smoothstep(0.02, 0.42, uBurst);
         totalEmissiveRadiance *= smoothstep(0.15, 0.7, uSolid);`,
       )
@@ -308,13 +317,154 @@ function dressSnow(
 }
 
 /**
- * Long edges of the brick mesh, in the mesh's own local space.
- * The line is parented to the brick, so it uses that brick's world matrix.
- * Node rotation is identity and the dome lean is baked into the vertices;
- * an oriented box fit on those vertices skewed each brick differently.
+ * One orthogonal box around the brick, in the mesh's local space.
+ * The line is parented to the brick, so it takes that brick's world matrix.
+ * Axes come from the brick's own long sharp edges. A vertex-cloud fit skewed
+ * sculpted blocks, and drawing every facet edge read as a cage.
  */
 function brickEdges(geometry: BufferGeometry) {
-  return new EdgesGeometry(geometry, 46)
+  const empty = new BufferGeometry()
+  const src = geometry.getAttribute('position')
+  if (!src || src.count < 8) return empty
+  const min = [Infinity, Infinity, Infinity]
+  const max = [-Infinity, -Infinity, -Infinity]
+  for (let i = 0; i < src.count; i += 1) {
+    const x = src.getX(i)
+    const y = src.getY(i)
+    const z = src.getZ(i)
+    if (x < min[0]) min[0] = x
+    if (y < min[1]) min[1] = y
+    if (z < min[2]) min[2] = z
+    if (x > max[0]) max[0] = x
+    if (y > max[1]) max[1] = y
+    if (z > max[2]) max[2] = z
+  }
+  const span = Math.hypot((max[0] ?? 0) - (min[0] ?? 0), (max[1] ?? 0) - (min[1] ?? 0), (max[2] ?? 0) - (min[2] ?? 0))
+  const sharp = new EdgesGeometry(geometry, 40)
+  const attr = sharp.getAttribute('position')
+  const buckets: Array<{ dir: [number, number, number]; weight: number }> = []
+  if (attr) {
+    for (let i = 0; i < attr.count; i += 2) {
+      let dx = attr.getX(i + 1) - attr.getX(i)
+      let dy = attr.getY(i + 1) - attr.getY(i)
+      let dz = attr.getZ(i + 1) - attr.getZ(i)
+      const len = Math.hypot(dx, dy, dz)
+      if (len < Math.max(0.04, span * 0.12)) continue
+      dx /= len
+      dy /= len
+      dz /= len
+      if (dy < 0 || (Math.abs(dy) < 1e-4 && dx < 0)) {
+        dx = -dx
+        dy = -dy
+        dz = -dz
+      }
+      const dir: [number, number, number] = [dx, dy, dz]
+      const bucket = buckets.find((entry) => Math.abs(dot3(entry.dir, dir)) > 0.92)
+      if (bucket) bucket.weight += len
+      else buckets.push({ dir, weight: len })
+    }
+  }
+  sharp.dispose()
+  buckets.sort((a, b) => b.weight - a.weight)
+  const primary = buckets[0]?.dir
+  const secondary = buckets.find((entry, index) => index > 0 && primary && Math.abs(dot3(primary, entry.dir)) < 0.4)?.dir
+  if (!primary || !secondary) return axisBox(min, max)
+  const axisA = normalize3(primary)
+  if (!axisA) return axisBox(min, max)
+  const axisB = normalize3(reject3(secondary, axisA))
+  if (!axisB) return axisBox(min, max)
+  const axisC = cross3(axisA, axisB)
+  const axes = [axisA, axisB, axisC]
+  const lo = [Infinity, Infinity, Infinity]
+  const hi = [-Infinity, -Infinity, -Infinity]
+  for (let i = 0; i < src.count; i += 1) {
+    const point: [number, number, number] = [src.getX(i), src.getY(i), src.getZ(i)]
+    for (let axis = 0; axis < 3; axis += 1) {
+      const basis = axes[axis]
+      if (!basis) continue
+      const projected = dot3(point, basis)
+      if (projected < lo[axis]) lo[axis] = projected
+      if (projected > hi[axis]) hi[axis] = projected
+    }
+  }
+  const corner = (ix: number, iy: number, iz: number) => {
+    const coords = [ix ? hi[0] : lo[0], iy ? hi[1] : lo[1], iz ? hi[2] : lo[2]]
+    const out: [number, number, number] = [0, 0, 0]
+    for (let axis = 0; axis < 3; axis += 1) {
+      const basis = axes[axis]
+      const value = coords[axis] ?? 0
+      if (!basis) continue
+      out[0] += basis[0] * value
+      out[1] += basis[1] * value
+      out[2] += basis[2] * value
+    }
+    return out
+  }
+  const corners = [
+    corner(0, 0, 0),
+    corner(1, 0, 0),
+    corner(0, 1, 0),
+    corner(1, 1, 0),
+    corner(0, 0, 1),
+    corner(1, 0, 1),
+    corner(0, 1, 1),
+    corner(1, 1, 1),
+  ]
+  const pairs = [0, 1, 2, 3, 4, 5, 6, 7, 0, 2, 1, 3, 4, 6, 5, 7, 0, 4, 1, 5, 2, 6, 3, 7]
+  const positions: number[] = []
+  for (let i = 0; i < pairs.length; i += 2) {
+    const a = corners[pairs[i] ?? 0]
+    const b = corners[pairs[i + 1] ?? 0]
+    if (!a || !b) continue
+    positions.push(a[0], a[1], a[2], b[0], b[1], b[2])
+  }
+  const geo = new BufferGeometry()
+  geo.setAttribute('position', new Float32BufferAttribute(positions, 3))
+  return geo
+}
+
+function axisBox(min: number[], max: number[]) {
+  const x0 = min[0] ?? 0
+  const y0 = min[1] ?? 0
+  const z0 = min[2] ?? 0
+  const x1 = max[0] ?? 0
+  const y1 = max[1] ?? 0
+  const z1 = max[2] ?? 0
+  const positions = [
+    x0, y0, z0, x1, y0, z0, x0, y1, z0, x1, y1, z0, x0, y0, z1, x1, y0, z1, x0, y1, z1, x1, y1, z1,
+    x0, y0, z0, x0, y1, z0, x1, y0, z0, x1, y1, z0, x0, y0, z1, x0, y1, z1, x1, y0, z1, x1, y1, z1,
+    x0, y0, z0, x0, y0, z1, x1, y0, z0, x1, y0, z1, x0, y1, z0, x0, y1, z1, x1, y1, z0, x1, y1, z1,
+  ]
+  const geo = new BufferGeometry()
+  geo.setAttribute('position', new Float32BufferAttribute(positions, 3))
+  return geo
+}
+
+function dot3(a: readonly number[], b: readonly number[]) {
+  return (a[0] ?? 0) * (b[0] ?? 0) + (a[1] ?? 0) * (b[1] ?? 0) + (a[2] ?? 0) * (b[2] ?? 0)
+}
+
+function cross3(a: readonly number[], b: readonly number[]): [number, number, number] {
+  return [
+    (a[1] ?? 0) * (b[2] ?? 0) - (a[2] ?? 0) * (b[1] ?? 0),
+    (a[2] ?? 0) * (b[0] ?? 0) - (a[0] ?? 0) * (b[2] ?? 0),
+    (a[0] ?? 0) * (b[1] ?? 0) - (a[1] ?? 0) * (b[0] ?? 0),
+  ]
+}
+
+function normalize3(v: readonly number[]) {
+  const len = Math.hypot(v[0] ?? 0, v[1] ?? 0, v[2] ?? 0)
+  if (len < 1e-5) return null
+  return [(v[0] ?? 0) / len, (v[1] ?? 0) / len, (v[2] ?? 0) / len] as [number, number, number]
+}
+
+function reject3(v: readonly number[], axis: readonly number[]) {
+  const scale = dot3(v, axis)
+  return [(v[0] ?? 0) - (axis[0] ?? 0) * scale, (v[1] ?? 0) - (axis[1] ?? 0) * scale, (v[2] ?? 0) - (axis[2] ?? 0) * scale] as [
+    number,
+    number,
+    number,
+  ]
 }
 
 function blockCarrier(mesh: Mesh) {
