@@ -91,8 +91,8 @@ function dressPortal(root: Group, quality: Quality) {
   root.traverse((object) => {
     if (!(object instanceof Mesh)) return
     if (object.name === 'halo') {
-      // v5 already bakes a hot core and blue flares. A large gain turns the halo white.
-      object.material = fxMaterial(object.material, 1.25, new Color(0.92, 0.96, 1), AdditiveBlending, false)
+      // v6 bakes a thin blue core. Raise it so the flares read white-blue and broad.
+      object.material = fxMaterial(object.material, 4.4, new Color(0.75, 0.86, 1), AdditiveBlending, false)
       object.renderOrder = 5
       object.frustumCulled = false
       return
@@ -105,10 +105,10 @@ function dressPortal(root: Group, quality: Quality) {
     }
     const material = object.material
     if (!(material instanceof MeshStandardMaterial)) return
-    material.emissiveIntensity = 0.55
+    material.emissiveIntensity = 0.7
     material.metalness = 0
-    material.envMapIntensity = 0.2
-    material.normalScale.set(0.22, 0.22)
+    material.envMapIntensity = 0.22
+    material.normalScale.set(0.7, 0.7)
     material.fog = true
     material.toneMapped = true
     object.castShadow = quality.shadows
@@ -116,7 +116,7 @@ function dressPortal(root: Group, quality: Quality) {
   })
 }
 
-/** v5's lattice is a milky bake. Draw it unlit so the frost is not lost in the stone lighting. */
+/** Keep the milky body thin and lift the brighter lattice strokes so the wires read. */
 function latticeDisc(source: Material | Material[]) {
   const entry = Array.isArray(source) ? source[0] : source
   const map =
@@ -127,7 +127,7 @@ function latticeDisc(source: Material | Material[]) {
   }
   const material = new MeshBasicMaterial({
     map: map ?? undefined,
-    color: '#e7eef3',
+    color: '#e7eef4',
     transparent: true,
     opacity: 1,
     depthWrite: false,
@@ -139,10 +139,15 @@ function latticeDisc(source: Material | Material[]) {
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <map_fragment>',
       `#include <map_fragment>
-       diffuseColor.a = clamp(diffuseColor.a * 1.2 + 0.08, 0.0, 0.88);`,
+       {
+         float luma = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
+         float line = smoothstep(0.34, 0.62, luma);
+         diffuseColor.rgb *= mix(0.72, 1.45, line);
+         diffuseColor.a = mix(min(diffuseColor.a, 0.22), 0.46, line);
+       }`,
     )
   }
-  material.customProgramCacheKey = () => 'lattice-disc-v5'
+  material.customProgramCacheKey = () => 'lattice-disc-v6'
   return material
 }
 

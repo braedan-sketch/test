@@ -3,7 +3,6 @@ import {
   BufferGeometry,
   Color,
   EdgesGeometry,
-  Float32BufferAttribute,
   Group,
   LineBasicMaterial,
   LineSegments,
@@ -31,8 +30,8 @@ const LABEL_OFFSETS: Array<[number, number]> = [
   [-13, 2],
 ]
 
-/** v12 bakes a thin edge band. Intensity stays high so the shader can tell the band from the face glow. */
-const EMISSIVE_INTENSITY = 3.4
+/** v13 bakes a brighter, whiter glow. Keep the intensity under the frame so the white texels don't blow out. */
+const EMISSIVE_INTENSITY = 1.35
 
 export type LabelAnchor = {
   position: Vector3
@@ -94,7 +93,7 @@ export async function loadIgloo(
   const solidUniforms: Array<{ value: number }> = []
   const burstUniforms: Array<{ value: number }> = []
   const wireMaterial = new LineBasicMaterial({
-    color: '#e7eef3',
+    color: '#f4f8fb',
     transparent: true,
     opacity: 1,
     depthWrite: false,
@@ -156,20 +155,22 @@ export async function loadIgloo(
   innerLights[2]?.position.set(-0.22, 0.42, -0.08)
   for (const light of innerLights) group.add(light)
   const cavity = new Mesh(
-    new SphereGeometry(1.48, 32, 20),
+    new SphereGeometry(1.05, 28, 18),
     new MeshBasicMaterial({
-      color: new Color().setRGB(7.2, 7.8, 8.6),
+      color: new Color().setRGB(3.4, 3.7, 4.2),
       toneMapped: false,
       fog: false,
       side: BackSide,
       transparent: true,
       opacity: 0,
       depthWrite: false,
+      depthTest: true,
     }),
   )
   cavity.name = 'igloo-core'
-  cavity.position.set(0, 1.16, -0.02)
-  cavity.scale.set(1.18, 0.72, 1.12)
+  // About 0.85 of the inner cavity, so the shell stays inside the bricks.
+  cavity.position.set(0, 1.02, 0.02)
+  cavity.scale.set(1.02, 0.78, 0.98)
   group.add(cavity)
   const cavityMaterial = cavity.material
   const snowMaterials = [...shared.values()]
@@ -186,12 +187,13 @@ export async function loadIgloo(
       for (const slot of burstUniforms) slot.value = burst
       group.visible = dissolve < 0.985
       const present = smoother(clamp(solid * 1.15, 0, 1)) * (1 - smoother(dissolve))
-      const flood = present * (1 - smoother(burst))
-      gapLight.intensity = flood * 1.6
-      const gains = [3.2, 2.1, 1.4]
+      const flood = present * (1 - smoother(clamp(burst / 0.3, 0, 1)))
+      gapLight.intensity = flood * 2.4
+      const gains = [4.5, 2.8, 1.8]
       innerLights.forEach((light, index) => {
-        light.intensity = flood * (gains[index] ?? 8)
+        light.intensity = flood * (gains[index] ?? 2)
       })
+      cavity.visible = flood > 0.02
       if (cavityMaterial instanceof MeshBasicMaterial) cavityMaterial.opacity = flood
       // Stops 00–01 stay wire. The solid writes nothing and casts nothing, so it
       // cannot leave a black disc in the snow under the dome.
@@ -263,8 +265,8 @@ function dressSnow(
   const existing = shared.get('snow')
   if (existing) return existing
   const entry = source.clone()
-  // v12 faces already carry the per-block ice tone. Keep them near that bake.
-  entry.color.multiplyScalar(0.62)
+  // v13 already runs from near-black to bright ice. A light scale keeps that range under white.
+  entry.color.multiplyScalar(0.72)
   entry.emissive.setRGB(1, 1, 1)
   entry.emissiveIntensity = EMISSIVE_INTENSITY
   entry.metalness = 0
@@ -296,20 +298,24 @@ function dressSnow(
         `#include <color_fragment>
         {
           float rim = max(diffuseColor.r, max(diffuseColor.g, diffuseColor.b));
-          diffuseColor.rgb *= mix(1.0, 0.22, smoothstep(0.5, 0.82, rim));
+          diffuseColor.rgb *= mix(1.0, 0.78, smoothstep(0.84, 0.98, rim));
         }`,
       )
       .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
         float seam = max(totalEmissiveRadiance.r, max(totalEmissiveRadiance.g, totalEmissiveRadiance.b));
-        float band = smoothstep(0.85, 2.2, seam);
-        totalEmissiveRadiance *= mix(0.12, 0.0, band);
-        totalEmissiveRadiance *= 1.0 - smoothstep(0.02, 0.42, uBurst);
+        float band = smoothstep(1.05, 1.4, seam);
+        float body = smoothstep(0.05, 0.45, seam) * (1.0 - band);
+        totalEmissiveRadiance *= mix(0.62, 0.08, band);
+        float facing = clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0);
+        float fres = pow(1.0 - facing, 2.6);
+        totalEmissiveRadiance += vec3(0.42, 0.5, 0.62) * fres * (0.18 + body) * 0.55;
+        totalEmissiveRadiance *= 1.0 - smoothstep(0.0, 0.28, uBurst);
         totalEmissiveRadiance *= smoothstep(0.15, 0.7, uSolid);`,
       )
   }
-  entry.customProgramCacheKey = () => `${priorKey()}-igloo-v12`
+  entry.customProgramCacheKey = () => `${priorKey()}-igloo-v13`
   solidUniforms.push(uniforms.uSolid)
   burstUniforms.push(uniforms.uBurst)
   shared.set('snow', entry)
@@ -317,154 +323,12 @@ function dressSnow(
 }
 
 /**
- * One orthogonal box around the brick, in the mesh's local space.
- * The line is parented to the brick, so it takes that brick's world matrix.
- * Axes come from the brick's own long sharp edges. A vertex-cloud fit skewed
- * sculpted blocks, and drawing every facet edge read as a cage.
+ * Real edges of the brick mesh, in the mesh's own space.
+ * The line is parented to the brick, so it follows that brick's world matrix.
+ * Node rotation is identity, so an axis-aligned box is world scaffolding.
  */
 function brickEdges(geometry: BufferGeometry) {
-  const empty = new BufferGeometry()
-  const src = geometry.getAttribute('position')
-  if (!src || src.count < 8) return empty
-  const min = [Infinity, Infinity, Infinity]
-  const max = [-Infinity, -Infinity, -Infinity]
-  for (let i = 0; i < src.count; i += 1) {
-    const x = src.getX(i)
-    const y = src.getY(i)
-    const z = src.getZ(i)
-    if (x < min[0]) min[0] = x
-    if (y < min[1]) min[1] = y
-    if (z < min[2]) min[2] = z
-    if (x > max[0]) max[0] = x
-    if (y > max[1]) max[1] = y
-    if (z > max[2]) max[2] = z
-  }
-  const span = Math.hypot((max[0] ?? 0) - (min[0] ?? 0), (max[1] ?? 0) - (min[1] ?? 0), (max[2] ?? 0) - (min[2] ?? 0))
-  const sharp = new EdgesGeometry(geometry, 40)
-  const attr = sharp.getAttribute('position')
-  const buckets: Array<{ dir: [number, number, number]; weight: number }> = []
-  if (attr) {
-    for (let i = 0; i < attr.count; i += 2) {
-      let dx = attr.getX(i + 1) - attr.getX(i)
-      let dy = attr.getY(i + 1) - attr.getY(i)
-      let dz = attr.getZ(i + 1) - attr.getZ(i)
-      const len = Math.hypot(dx, dy, dz)
-      if (len < Math.max(0.04, span * 0.12)) continue
-      dx /= len
-      dy /= len
-      dz /= len
-      if (dy < 0 || (Math.abs(dy) < 1e-4 && dx < 0)) {
-        dx = -dx
-        dy = -dy
-        dz = -dz
-      }
-      const dir: [number, number, number] = [dx, dy, dz]
-      const bucket = buckets.find((entry) => Math.abs(dot3(entry.dir, dir)) > 0.92)
-      if (bucket) bucket.weight += len
-      else buckets.push({ dir, weight: len })
-    }
-  }
-  sharp.dispose()
-  buckets.sort((a, b) => b.weight - a.weight)
-  const primary = buckets[0]?.dir
-  const secondary = buckets.find((entry, index) => index > 0 && primary && Math.abs(dot3(primary, entry.dir)) < 0.4)?.dir
-  if (!primary || !secondary) return axisBox(min, max)
-  const axisA = normalize3(primary)
-  if (!axisA) return axisBox(min, max)
-  const axisB = normalize3(reject3(secondary, axisA))
-  if (!axisB) return axisBox(min, max)
-  const axisC = cross3(axisA, axisB)
-  const axes = [axisA, axisB, axisC]
-  const lo = [Infinity, Infinity, Infinity]
-  const hi = [-Infinity, -Infinity, -Infinity]
-  for (let i = 0; i < src.count; i += 1) {
-    const point: [number, number, number] = [src.getX(i), src.getY(i), src.getZ(i)]
-    for (let axis = 0; axis < 3; axis += 1) {
-      const basis = axes[axis]
-      if (!basis) continue
-      const projected = dot3(point, basis)
-      if (projected < lo[axis]) lo[axis] = projected
-      if (projected > hi[axis]) hi[axis] = projected
-    }
-  }
-  const corner = (ix: number, iy: number, iz: number) => {
-    const coords = [ix ? hi[0] : lo[0], iy ? hi[1] : lo[1], iz ? hi[2] : lo[2]]
-    const out: [number, number, number] = [0, 0, 0]
-    for (let axis = 0; axis < 3; axis += 1) {
-      const basis = axes[axis]
-      const value = coords[axis] ?? 0
-      if (!basis) continue
-      out[0] += basis[0] * value
-      out[1] += basis[1] * value
-      out[2] += basis[2] * value
-    }
-    return out
-  }
-  const corners = [
-    corner(0, 0, 0),
-    corner(1, 0, 0),
-    corner(0, 1, 0),
-    corner(1, 1, 0),
-    corner(0, 0, 1),
-    corner(1, 0, 1),
-    corner(0, 1, 1),
-    corner(1, 1, 1),
-  ]
-  const pairs = [0, 1, 2, 3, 4, 5, 6, 7, 0, 2, 1, 3, 4, 6, 5, 7, 0, 4, 1, 5, 2, 6, 3, 7]
-  const positions: number[] = []
-  for (let i = 0; i < pairs.length; i += 2) {
-    const a = corners[pairs[i] ?? 0]
-    const b = corners[pairs[i + 1] ?? 0]
-    if (!a || !b) continue
-    positions.push(a[0], a[1], a[2], b[0], b[1], b[2])
-  }
-  const geo = new BufferGeometry()
-  geo.setAttribute('position', new Float32BufferAttribute(positions, 3))
-  return geo
-}
-
-function axisBox(min: number[], max: number[]) {
-  const x0 = min[0] ?? 0
-  const y0 = min[1] ?? 0
-  const z0 = min[2] ?? 0
-  const x1 = max[0] ?? 0
-  const y1 = max[1] ?? 0
-  const z1 = max[2] ?? 0
-  const positions = [
-    x0, y0, z0, x1, y0, z0, x0, y1, z0, x1, y1, z0, x0, y0, z1, x1, y0, z1, x0, y1, z1, x1, y1, z1,
-    x0, y0, z0, x0, y1, z0, x1, y0, z0, x1, y1, z0, x0, y0, z1, x0, y1, z1, x1, y0, z1, x1, y1, z1,
-    x0, y0, z0, x0, y0, z1, x1, y0, z0, x1, y0, z1, x0, y1, z0, x0, y1, z1, x1, y1, z0, x1, y1, z1,
-  ]
-  const geo = new BufferGeometry()
-  geo.setAttribute('position', new Float32BufferAttribute(positions, 3))
-  return geo
-}
-
-function dot3(a: readonly number[], b: readonly number[]) {
-  return (a[0] ?? 0) * (b[0] ?? 0) + (a[1] ?? 0) * (b[1] ?? 0) + (a[2] ?? 0) * (b[2] ?? 0)
-}
-
-function cross3(a: readonly number[], b: readonly number[]): [number, number, number] {
-  return [
-    (a[1] ?? 0) * (b[2] ?? 0) - (a[2] ?? 0) * (b[1] ?? 0),
-    (a[2] ?? 0) * (b[0] ?? 0) - (a[0] ?? 0) * (b[2] ?? 0),
-    (a[0] ?? 0) * (b[1] ?? 0) - (a[1] ?? 0) * (b[0] ?? 0),
-  ]
-}
-
-function normalize3(v: readonly number[]) {
-  const len = Math.hypot(v[0] ?? 0, v[1] ?? 0, v[2] ?? 0)
-  if (len < 1e-5) return null
-  return [(v[0] ?? 0) / len, (v[1] ?? 0) / len, (v[2] ?? 0) / len] as [number, number, number]
-}
-
-function reject3(v: readonly number[], axis: readonly number[]) {
-  const scale = dot3(v, axis)
-  return [(v[0] ?? 0) - (axis[0] ?? 0) * scale, (v[1] ?? 0) - (axis[1] ?? 0) * scale, (v[2] ?? 0) - (axis[2] ?? 0) * scale] as [
-    number,
-    number,
-    number,
-  ]
+  return new EdgesGeometry(geometry, 30)
 }
 
 function blockCarrier(mesh: Mesh) {

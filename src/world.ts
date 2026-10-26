@@ -33,7 +33,7 @@ export function sampleHeight(_x: number, _z: number) {
 
 export type World = {
   fog: FogExp2
-  update: (time: number, mood: number, wire?: number, field?: boolean, mist?: boolean) => void
+  update: (time: number, mood: number, wire?: number, field?: boolean, mist?: boolean, hideMound?: boolean) => void
   adoptGround: (object: Object3D | null) => void
 }
 
@@ -100,14 +100,14 @@ export function createWorld(scene: Scene, quality: Quality, renderer: WebGLRende
       object.position.y += groundY + 0.06 - box.min.y
       seated = true
     },
-    update(time, mood, wire = 0, field = true, mist = false) {
+    update(time, mood, wire = 0, field = true, mist = false, hideMound = false) {
       fog.color.copy(mist ? MIST : HAZE)
       fog.density = mist ? 0.011 : fogDensity(mood)
       skyMat.uniforms.uMood!.value = mood
       skyMat.uniforms.uWire!.value = wire
       skyMat.uniforms.uMist!.value = mist ? 1 : 0
-      // The portal supplies its own pale backdrop. The mound stays for the field.
-      terrainRoot.visible = !mist
+      // The portal has its own backdrop. The fox shot hides the mound so the plinth stays clear.
+      terrainRoot.visible = !mist && !hideMound
       ranges.visible = !mist
       const showSnow = field && wire < 0.4
       if (showSnow) {
@@ -136,19 +136,16 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
   if (Array.isArray(entry) || !(entry instanceof MeshStandardMaterial)) return
   entry.fog = true
   if (kind === 'terrain') {
-    // v9 bakes a darker grade. Lift it so the mound reads as snow under the dome.
-    entry.color.multiplyScalar(1.2)
+    // v10 is a crusted crag. Keep the baked rock instead of washing it out to snow.
     entry.roughness = 1
     entry.metalness = 0
-    entry.roughnessMap = null
-    entry.metalnessMap = null
     entry.envMapIntensity = 0
-    entry.normalScale.set(0.28, 0.28)
+    entry.normalScale.set(1, 1)
   }
   const prior = entry.onBeforeCompile
   const priorKey = entry.customProgramCacheKey.bind(entry)
-  const curve = kind === 'terrain' ? '0.9' : '0.96'
-  const gain = kind === 'terrain' ? '1.08' : '1.04'
+  const curve = kind === 'terrain' ? '1.02' : '0.96'
+  const gain = kind === 'terrain' ? '1.0' : '1.04'
   entry.onBeforeCompile = (shader, renderer) => {
     prior.call(entry, shader, renderer)
     shader.fragmentShader = shader.fragmentShader
@@ -166,21 +163,19 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
           : '#include <lights_fragment_end>',
       )
     if (kind === 'terrain') {
-      // Lift the pad so the dome sits on a mound, and flatten only past the flank rocks.
+      // The mound is in the mesh. Flatten only the mid-distance past it.
       shader.vertexShader = shader.vertexShader.replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
          vec4 spikeWorld = modelMatrix * vec4(transformed, 1.0);
          float spikeR = length(spikeWorld.xz);
-         float perch = (1.0 - smoothstep(0.4, 7.5, spikeR)) * 0.32;
-         transformed.y += perch;
-         float spikeBand = smoothstep(16.0, 24.0, spikeR) * (1.0 - smoothstep(48.0, 72.0, spikeR));
-         float mound = -0.12 - smoothstep(16.0, 42.0, spikeR) * 0.45;
+         float spikeBand = smoothstep(18.0, 26.0, spikeR) * (1.0 - smoothstep(48.0, 72.0, spikeR));
+         float mound = -0.2 - smoothstep(18.0, 42.0, spikeR) * 0.5;
          transformed.y = mix(transformed.y, min(transformed.y, mound), spikeBand);`,
       )
     }
   }
-  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v10`
+  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v11`
 }
 
 function buildSky() {

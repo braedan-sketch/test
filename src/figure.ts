@@ -181,7 +181,7 @@ export async function createFigure(quality: Quality): Promise<Figure> {
         roughness: 0.28,
         metalness: 0.18,
         emissive: '#b7cfe2',
-        emissiveIntensity: 0.28 - i * 0.04,
+        emissiveIntensity: 0.62 - i * 0.07,
       }),
     )
     ring.rotation.x = Math.PI / 2

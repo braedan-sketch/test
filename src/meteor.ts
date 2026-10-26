@@ -95,44 +95,43 @@ function dressCrystal(mesh: Mesh, envMap: Texture, low: boolean) {
   if (!(source instanceof MeshStandardMaterial)) return
   const cloud = mesh.name === 'crystal_core' || source.name === 'crystal_cloud'
   if (cloud) {
-    // Opaque so the transmission pass can refract the card. The picture stays grey smoke.
+    // Opaque figure card so the transmission pass can refract it. Haze below the cutoff is discarded.
     source.transparent = false
     source.opacity = 1
-    source.alphaTest = 0.22
+    source.alphaTest = 0.34
     source.depthWrite = true
     source.depthTest = true
     source.side = DoubleSide
     source.fog = false
     source.metalness = 0
-    source.roughness = 0.9
-    source.emissiveIntensity = 0.16
-    source.color.set('#b4bcc2')
-    source.emissive.set('#8e979e')
+    source.roughness = 0.85
+    source.emissiveIntensity = 0.8
+    source.color.set('#e4eaee')
+    source.emissive.set('#d7dee4')
     muteSmoke(source)
     mesh.renderOrder = 0
     return
   }
   if (!(source instanceof MeshPhysicalMaterial)) return
-  // Partial transmission plus a dark base colour. Volume tint alone stayed clear on the M2.
-  source.transmission = 0.74
+  // Bright glass. A dark base and a short attenuation distance turned the shell black on the M2.
+  source.transmission = 1
   source.ior = 1.45
   source.thickness = shellThickness(mesh, source.thickness)
-  source.attenuationColor.setRGB(0.45, 0.55, 0.7, LinearSRGBColorSpace)
-  source.attenuationDistance = 0.6
-  source.color.set('#3c4b59')
-  source.roughness = 0.26
-  source.roughnessMap = null
+  source.attenuationColor.setRGB(0.82, 0.89, 0.97, LinearSRGBColorSpace)
+  source.attenuationDistance = 2
+  source.color.set('#f4f7f8')
+  source.roughness = 0.16
   source.metalness = 0
-  source.metalnessMap = null
-  source.normalScale.set(0.3, 0.3)
+  source.normalScale.set(0.45, 0.45)
   source.iridescence = 0
   source.dispersion = 0
   source.clearcoat = 0
-  source.specularIntensity = 0.34
+  source.specularIntensity = 0.4
   source.envMap = envMap
-  source.envMapIntensity = low ? 0.04 : 0.06
+  source.envMapIntensity = low ? 0.08 : 0.14
   source.fog = false
   source.transparent = false
+  source.depthWrite = true
   if (source.thicknessMap) {
     source.thicknessMap.colorSpace = NoColorSpace
     source.thicknessMap.needsUpdate = true
@@ -154,7 +153,7 @@ function muteSmoke(source: MeshStandardMaterial) {
         `#include <color_fragment>
         {
           float y = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(y), 0.86) * vec3(0.78, 0.82, 0.88);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(y), 0.45);
         }`,
       )
       .replace(
@@ -162,22 +161,21 @@ function muteSmoke(source: MeshStandardMaterial) {
         `#include <emissivemap_fragment>
         {
           float y = dot(totalEmissiveRadiance, vec3(0.2126, 0.7152, 0.0722));
-          totalEmissiveRadiance = mix(totalEmissiveRadiance, vec3(y), 0.9) * vec3(0.7, 0.74, 0.8);
-          totalEmissiveRadiance *= 0.28;
+          totalEmissiveRadiance = mix(totalEmissiveRadiance, vec3(y), 0.55);
         }`,
       )
   }
-  source.customProgramCacheKey = () => `${priorKey()}-crystal-smoke-v4`
+  source.customProgramCacheKey = () => `${priorKey()}-crystal-smoke-v5`
 }
 
-/** v4 publishes thickness on the shell. Fall back to the measured 1.556 m. */
+/** v5 publishes thickness on the shell. Fall back to the measured 1.4996 m. */
 function shellThickness(mesh: Mesh, loaded: number) {
   const own = Number((mesh.userData as { thickness_max_m?: unknown }).thickness_max_m)
   const parent = Number((mesh.parent?.userData as { thickness_max_m?: unknown } | undefined)?.thickness_max_m)
   const published = Number.isFinite(own) && own > 0.2 ? own : parent
   if (Number.isFinite(published) && published > 0.2) return published
   if (loaded > 0.2) return loaded
-  return 1.556
+  return 1.4996
 }
 
 function studioRoom(renderer: WebGLRenderer) {

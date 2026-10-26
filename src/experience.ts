@@ -194,7 +194,10 @@ export async function startExperience(overlay: Overlay) {
     new EffectPass(camera, noise, frost, vignette, tone),
   )
 
-  let dpr = Math.min(window.devicePixelRatio || 1, quality.dprCap)
+  let fieldDpr = Math.min(window.devicePixelRatio || 1, quality.dprCap)
+  let crystalDpr = Math.min(fieldDpr, 1.5)
+  let dpr = fieldDpr
+  let crystalSlow = 0
   const resize = () => {
     const width = window.innerWidth
     const height = window.innerHeight
@@ -203,8 +206,17 @@ export async function startExperience(overlay: Overlay) {
     camera.aspect = width / Math.max(1, height)
     camera.updateProjectionMatrix()
   }
+  const setDpr = (next: number) => {
+    if (Math.abs(next - dpr) < 0.02) return
+    dpr = next
+    resize()
+  }
   resize()
   window.addEventListener('resize', resize)
+  canvas.addEventListener('webglcontextlost', (event) => {
+    event.preventDefault()
+    console.warn('WebGL context lost')
+  })
 
   const ambience = new Ambience()
   overlay.onSound(() => {
@@ -365,7 +377,20 @@ export async function startExperience(overlay: Overlay) {
       const phase = readPhase(global, marks)
 
       const wire = phase.screen === 'field' ? 1 - smoother(phase.solid) : 0
-      world.update(now / 1000, phase.mood, wire, phase.screen === 'field', phase.screen === 'rings')
+      const crystalView = phase.screen === 'rift' || phase.screen === 'meteor'
+      if (crystalView) {
+        if (rawDt > 1 / 45) crystalSlow += rawDt
+        else crystalSlow = Math.max(0, crystalSlow - rawDt)
+        if (crystalSlow >= 1 && crystalDpr > 1.05) {
+          crystalDpr = Math.max(1, +(crystalDpr - 0.25).toFixed(2))
+          crystalSlow = 0
+        }
+        setDpr(crystalDpr)
+      } else {
+        crystalSlow = 0
+        setDpr(fieldDpr)
+      }
+      world.update(now / 1000, phase.mood, wire, phase.screen === 'field', phase.screen === 'rings', phase.screen === 'figure')
       clear.copy(world.fog.color)
       renderer.setClearColor(clear, 1)
       scene.environmentIntensity =
@@ -457,10 +482,12 @@ export async function startExperience(overlay: Overlay) {
     if (!revealed || adapted) return
     accum += dt
     samples += 1
-    if (accum < 2.4) return
-    if (samples / accum < 48 && dpr > 1.05) {
-      dpr = Math.max(1, +(dpr - 0.3).toFixed(2))
-      resize()
+    if (accum < 1) return
+    if (samples / accum < 48 && fieldDpr > 1.05) {
+      const onField = Math.abs(dpr - fieldDpr) < 0.02
+      fieldDpr = Math.max(1, +(fieldDpr - 0.3).toFixed(2))
+      crystalDpr = Math.min(crystalDpr, fieldDpr)
+      if (onField) setDpr(fieldDpr)
     }
     adapted = true
   }
@@ -868,9 +895,9 @@ function applyGrade(
   const heroGlow = phase.screen === 'field' || phase.screen === 'rift'
   frost.setGrade(phase.screen === 'meteor' || figure ? 1 : 0)
   if (rings) {
-    bloom.intensity = 0.22
-    bloom.luminanceMaterial.threshold = 0.9
-    bloom.mipmapBlurPass.radius = 0.16
+    bloom.intensity = 0.62
+    bloom.luminanceMaterial.threshold = 0.68
+    bloom.mipmapBlurPass.radius = 0.46
   } else if (figure) {
     bloom.intensity = 0.08
     bloom.luminanceMaterial.threshold = 0.94
