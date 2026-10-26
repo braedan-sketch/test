@@ -169,9 +169,7 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
         `#include <begin_vertex>
          vec4 spikeWorld = modelMatrix * vec4(transformed, 1.0);
          float spikeR = length(spikeWorld.xz);
-         float spikeBand = smoothstep(18.0, 26.0, spikeR) * (1.0 - smoothstep(48.0, 72.0, spikeR));
-         float mound = -0.2 - smoothstep(18.0, 42.0, spikeR) * 0.5;
-         transformed.y = mix(transformed.y, min(transformed.y, mound), spikeBand);
+         // v12's mid-distance is rolling slopes and a ridge. Leave that mesh alone.
          // The hero camera sits on +Z. Knock down a rock that sticks above the slope into the bottom of that frame.
          float slope = -0.1 - smoothstep(2.4, 8.0, spikeR) * 3.4;
          float front = smoothstep(1.6, 4.5, spikeWorld.z);
@@ -180,7 +178,7 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
       )
     }
   }
-  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v12`
+  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v13`
 }
 
 function buildSky() {

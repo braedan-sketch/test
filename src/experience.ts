@@ -81,6 +81,8 @@ type GapMetric = {
   dpr: number
   width: number
   height: number
+  burst: number
+  solid: number
 }
 
 const scratchA = new Vector3()
@@ -436,7 +438,7 @@ export async function startExperience(overlay: Overlay) {
       dof.target = phase.screen === 'field' ? focusPoint : target
       dof.bokehScale = phase.screen === 'field' || phase.screen === 'rift' ? 0 : softGpu ? 0.08 : 0.12
       applyGrade(phase, bloom, chromatic, warp, tone, vignette, frost, camera.aspect)
-      noise.blendMode.setOpacity(phase.screen === 'field' ? 0.04 : 0.12)
+      noise.blendMode.setOpacity(phase.screen === 'field' ? 0.02 : 0.12)
       overlay.setFlash(phase.flash * 0.35)
       overlay.setUiDim(phase.screen === 'rings' ? 1 : 1 - phase.burst * 0.04)
       overlay.setScrollProgress(global)
@@ -569,8 +571,11 @@ function readPhase(global: number, marks: Marks): Phase {
   const inRings = global >= marks.rings && global < marks.figure
   const inFigure = global >= marks.figure
 
-  const solid = inField ? smoother(clamp((fieldT - 0.36) / 0.12, 0, 1)) : 1
-  const burst = inField ? clamp((fieldT - 0.58) / 0.42, 0, 1) : 1
+  // Ice is fully on by scroll ~0.15. The burst used to start at fieldT 0.58, which is
+  // scroll ~0.20, and the seam shader dies across the first 0.28 of that ramp.
+  const solid = inField ? smoother(clamp((fieldT - 0.22) / 0.18, 0, 1)) : 1
+  const heroHold = 0.268
+  const burst = inField ? clamp((global - heroHold) / Math.max(0.05, marks.rift - heroHold), 0, 1) : 1
   const dissolve = inField ? 0 : inRift ? smoother(clamp((riftT - 0.22) / 0.56, 0, 1)) : 1
   // Subjects overlap at the edges so a scroll stop never lands on an empty frame.
   const meteorReveal = inMeteor ? 1 : inRift ? smoother(clamp((riftT - 0.62) / 0.38, 0, 1)) : 0
@@ -930,11 +935,11 @@ function applyGrade(
     bloom.luminanceMaterial.threshold = 0.96
     bloom.mipmapBlurPass.radius = 0.08
   } else if (heroGlow) {
-    // Enough bloom to catch the seam, with a short radius so the slabs stay crisp.
+    // Strength stays on the seams. The radius is shorter than build 36 so the slabs don't mip-blur.
     bloom.intensity = 0.72
-    bloom.luminanceMaterial.threshold = 0.66
-    bloom.luminanceMaterial.smoothing = 0.14
-    bloom.mipmapBlurPass.radius = 0.05
+    bloom.luminanceMaterial.threshold = 0.72
+    bloom.luminanceMaterial.smoothing = 0.1
+    bloom.mipmapBlurPass.radius = 0.032
   } else {
     bloom.intensity = 0.08
     bloom.luminanceMaterial.threshold = 0.96
@@ -998,6 +1003,7 @@ function projectLabels(
       visible,
       bent: slot.bent && height <= width,
       constellation: slot.constellation === true,
+      lead: true,
     }
   })
   if (anchors.length > 0 && anchors.every((slot) => !slot.bent)) pinMarginLabels(views, width, height)
@@ -1016,6 +1022,7 @@ function pinMarginLabels(views: ProjectedLabel[], width: number, height: number)
     if (!view) return
     view.labelX = x
     view.labelY = order.length === 1 ? (top + bottom) / 2 : top + ((bottom - top) * n) / (order.length - 1)
+    view.lead = false
   })
 }
 
@@ -1101,6 +1108,10 @@ function noteGap(
   const due = state.pending != null || (hero && state.frames === 1)
   if (!due || !igloo) return
   const metric = sampleGap(igloo.group, scene, camera, renderer, state)
+  if (metric) {
+    metric.burst = phase.burst
+    metric.solid = phase.solid
+  }
   publishGap(metric)
   const resolve = state.pending
   state.pending = null
@@ -1120,7 +1131,7 @@ function publishGap(metric: GapMetric | null) {
     )
     document.body.append(node)
   }
-  node.textContent = `>235 ${(metric.hot * 100).toFixed(2)}%  face p40 ${metric.faceP40.toFixed(0)}  px ${metric.iglooPx}  dpr ${metric.dpr.toFixed(2)}  ${metric.width}x${metric.height}`
+  node.textContent = `>235 ${(metric.hot * 100).toFixed(2)}%  face p40 ${metric.faceP40.toFixed(0)}  burst ${metric.burst.toFixed(3)}  solid ${metric.solid.toFixed(2)}  px ${metric.iglooPx}  dpr ${metric.dpr.toFixed(2)}  ${metric.width}x${metric.height}`
   console.info('[metric]', node.textContent)
 }
 
@@ -1193,5 +1204,7 @@ function sampleGap(
     dpr: renderer.getPixelRatio(),
     width,
     height,
+    burst: 0,
+    solid: 0,
   }
 }

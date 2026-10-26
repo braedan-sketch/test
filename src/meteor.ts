@@ -119,13 +119,13 @@ function dressCrystal(mesh: Mesh, envMap: Texture, low: boolean) {
   source.ior = 1.45
   source.thickness = shellThickness(mesh, source.thickness)
   // v6 publishes a cool attenuation at 1 m. A light cool base keeps that from going black.
-  // A short blue attenuation turned the shell cobalt. This stays a low-saturation grey-blue.
-  source.attenuationColor.setRGB(0.86, 0.89, 0.93, LinearSRGBColorSpace)
-  source.attenuationDistance = 1.85
-  source.color.set('#8e9aa3')
-  source.roughness = 0.5
+  // Neutral grey-blue. The shorter blue attenuation read as navy.
+  source.attenuationColor.setRGB(0.94, 0.95, 0.97, LinearSRGBColorSpace)
+  source.attenuationDistance = 2.6
+  source.color.set('#c5ced4')
+  source.roughness = 0.42
   source.metalness = 0
-  source.normalScale.set(1.8, 1.8)
+  source.normalScale.set(2.5, 2.5)
   if (source.normalMap) {
     source.normalMap.colorSpace = NoColorSpace
     source.normalMap.needsUpdate = true
@@ -204,6 +204,15 @@ function tameGlint(source: MeshStandardMaterial) {
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vShell;')
       .replace(
+        '#include <normal_fragment>',
+        `#include <normal_fragment>
+        {
+          vec3 facet = normalize(cross(dFdx(vViewPosition), dFdy(vViewPosition)));
+          float chip = smoothstep(0.0, 0.32, vShell.x);
+          normal = normalize(mix(normal, facet, chip * 0.8));
+        }`,
+      )
+      .replace(
         '#include <roughnessmap_fragment>',
         `#include <roughnessmap_fragment>
         {
@@ -238,7 +247,7 @@ function tameGlint(source: MeshStandardMaterial) {
         }`,
       )
   }
-  source.customProgramCacheKey = () => `${priorKey()}-crystal-glint-v6`
+  source.customProgramCacheKey = () => `${priorKey()}-crystal-glint-v7`
 }
 
 /** v5 publishes thickness on the shell. Fall back to the measured 1.4996 m. */

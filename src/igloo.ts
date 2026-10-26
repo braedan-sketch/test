@@ -51,6 +51,8 @@ export type WireStats = {
   min: number
   max: number
   mean: number
+  volMed: number
+  volMax: number
 }
 
 export type Igloo = {
@@ -101,6 +103,7 @@ export async function loadIgloo(
 
   const blocks: Block[] = []
   const wireCounts: number[] = []
+  const fitted: FittedBox[] = []
   let hulls = 0
   const seen = new Set<Object3D>()
   const shared = new Map<string, MeshStandardMaterial>()
@@ -134,6 +137,7 @@ export async function loadIgloo(
     seen.add(node)
     const base = node.position.clone()
     const outline = brickEdges(object.geometry)
+    if (outline.box) fitted.push({ lines: outline.geometry, box: outline.box })
     wireCounts.push(outline.count)
     if (outline.hull) hulls += 1
     const wire = new LineSegments2(outline.geometry, wireMaterial)
@@ -153,6 +157,7 @@ export async function loadIgloo(
       phase: extras.bidx * 0.37,
     })
   })
+  capBrickVolumes(fitted)
   group.add(grid.lines)
 
   if (blocks.length === 0) throw new Error('igloo.glb has no blocks')
@@ -203,7 +208,7 @@ export async function loadIgloo(
     group,
     uniforms,
     labelCount: labels.length,
-    wireStats: summarizeWires(wireCounts, hulls),
+    wireStats: summarizeWires(wireCounts, hulls, fitted.map((entry) => entry.box.volume)),
     update(burst, solid, dissolve, time) {
       uniforms.uBurst.value = burst
       uniforms.uSolid.value = solid
@@ -368,7 +373,7 @@ function brickEdges(geometry: BufferGeometry) {
   const lines = new LineSegmentsGeometry()
   if (!position || position.count < 4) {
     lines.setPositions(new Float32Array(6))
-    return { geometry: lines, count: 0, hull: false }
+    return { geometry: lines, count: 0, hull: false, box: null }
   }
   const step = Math.max(1, Math.floor(position.count / 4000))
   let cx = 0
@@ -402,8 +407,7 @@ function brickEdges(geometry: BufferGeometry) {
     yz += y * z
   }
   const axes = principalAxes(xx, yy, zz, xy, xz, yz)
-  const min = [Infinity, Infinity, Infinity]
-  const max = [-Infinity, -Infinity, -Infinity]
+  const samples: number[][] = [[], [], []]
   for (let i = 0; i < position.count; i += 1) {
     const x = position.getX(i) - cx
     const y = position.getY(i) - cy
@@ -411,10 +415,28 @@ function brickEdges(geometry: BufferGeometry) {
     for (let k = 0; k < 3; k += 1) {
       const axis = axes[k]
       if (!axis) continue
-      const t = x * axis.x + y * axis.y + z * axis.z
-      min[k] = Math.min(min[k] ?? Infinity, t)
-      max[k] = Math.max(max[k] ?? -Infinity, t)
+      samples[k]?.push(x * axis.x + y * axis.y + z * axis.z)
     }
+  }
+  const min: number[] = []
+  const max: number[] = []
+  for (let k = 0; k < 3; k += 1) {
+    const values = samples[k] ?? []
+    const lo = quantile(values, 0.1)
+    const hi = quantile(values, 0.9)
+    const mid = (lo + hi) * 0.5
+    const half = (hi - lo) * 0.5 * 0.88
+    min[k] = mid - half
+    max[k] = mid + half
+  }
+  const box: BrickBox = {
+    cx,
+    cy,
+    cz,
+    axes,
+    min,
+    max,
+    volume: Math.abs((max[0] ?? 0) - (min[0] ?? 0)) * Math.abs((max[1] ?? 0) - (min[1] ?? 0)) * Math.abs((max[2] ?? 0) - (min[2] ?? 0)),
   }
   const corners: Vector3[] = []
   for (let mask = 0; mask < 8; mask += 1) {
@@ -445,7 +467,87 @@ function brickEdges(geometry: BufferGeometry) {
     }
   }
   lines.setPositions(data)
-  return { geometry: lines, count: edge, hull: true }
+  return { geometry: lines, count: edge, hull: true, box }
+}
+
+type BrickBox = {
+  cx: number
+  cy: number
+  cz: number
+  axes: Vector3[]
+  min: number[]
+  max: number[]
+  volume: number
+}
+
+type FittedBox = {
+  lines: LineSegmentsGeometry
+  box: BrickBox
+}
+
+/** Crack vertices still inside the 4th–96th band. Shrink those boxes back to the median. */
+function capBrickVolumes(fitted: FittedBox[]) {
+  const volumes = fitted.map((entry) => entry.box.volume).filter((volume) => volume > 1e-6).sort((a, b) => a - b)
+  const median = volumes[Math.floor(volumes.length / 2)] ?? 0
+  const cap = median * 1.6
+  if (cap <= 0) return
+  for (const entry of fitted) {
+    const box = entry.box
+    if (box.volume <= cap) continue
+    const scale = Math.cbrt(cap / box.volume)
+    for (let k = 0; k < 3; k += 1) {
+      const lo = box.min[k] ?? 0
+      const hi = box.max[k] ?? 0
+      const mid = (lo + hi) * 0.5
+      const half = (hi - lo) * 0.5 * scale
+      box.min[k] = mid - half
+      box.max[k] = mid + half
+    }
+    box.volume = cap
+    entry.lines.setPositions(boxPositions(box))
+  }
+}
+
+function boxPositions(box: BrickBox) {
+  const corners: Vector3[] = []
+  for (let mask = 0; mask < 8; mask += 1) {
+    const point = new Vector3(box.cx, box.cy, box.cz)
+    for (let k = 0; k < 3; k += 1) {
+      const axis = box.axes[k]
+      if (!axis) continue
+      point.addScaledVector(axis, (mask & (1 << k)) !== 0 ? (box.max[k] ?? 0) : (box.min[k] ?? 0))
+    }
+    corners.push(point)
+  }
+  const data = new Float32Array(12 * 6)
+  let edge = 0
+  for (let a = 0; a < 8; a += 1) {
+    for (let k = 0; k < 3; k += 1) {
+      const b = a | (1 << k)
+      if (b === a) continue
+      const pa = corners[a]
+      const pb = corners[b]
+      if (!pa || !pb) continue
+      data[edge * 6] = pa.x
+      data[edge * 6 + 1] = pa.y
+      data[edge * 6 + 2] = pa.z
+      data[edge * 6 + 3] = pb.x
+      data[edge * 6 + 4] = pb.y
+      data[edge * 6 + 5] = pb.z
+      edge += 1
+    }
+  }
+  return data
+}
+
+function quantile(values: number[], p: number) {
+  if (values.length === 0) return 0
+  const sorted = values.slice().sort((a, b) => a - b)
+  const index = (sorted.length - 1) * p
+  const lo = Math.floor(index)
+  const hi = Math.min(sorted.length - 1, lo + 1)
+  const t = index - lo
+  return (sorted[lo] ?? 0) * (1 - t) + (sorted[hi] ?? 0) * t
 }
 
 /** Symmetric 3x3 Jacobi. Returns an orthonormal frame, longest axis first. */
@@ -545,7 +647,7 @@ function groundGrid() {
   return { lines, material }
 }
 
-function summarizeWires(counts: number[], hulls: number): WireStats {
+function summarizeWires(counts: number[], hulls: number, volumes: number[]): WireStats {
   let min = counts[0] ?? 0
   let max = min
   let sum = 0
@@ -554,12 +656,17 @@ function summarizeWires(counts: number[], hulls: number): WireStats {
     max = Math.max(max, count)
     sum += count
   }
+  const sorted = volumes.filter((volume) => volume > 0).sort((a, b) => a - b)
+  const volMed = sorted[Math.floor(sorted.length / 2)] ?? 0
+  const volMax = sorted[sorted.length - 1] ?? 0
   return {
     bricks: counts.length,
     hulls,
     min,
     max,
     mean: counts.length ? Math.round((sum / counts.length) * 10) / 10 : 0,
+    volMed: Math.round(volMed * 1000) / 1000,
+    volMax: Math.round(volMax * 1000) / 1000,
   }
 }
 

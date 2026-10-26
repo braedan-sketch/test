@@ -107,20 +107,21 @@ function dressPortal(root: Group, quality: Quality) {
     }
     const material = object.material
     if (!(material instanceof MeshStandardMaterial)) return
-    material.emissiveIntensity = 0.7
+    material.emissiveIntensity = 0.55
     material.metalness = 0
-    material.envMapIntensity = 0.22
-    material.normalScale.set(1, 1)
+    material.envMapIntensity = 0.16
+    material.normalScale.set(0.72, 0.72)
     material.fog = true
     material.toneMapped = true
-    // v7 is 106k tris. Skip the shadow map so the portal can stay at DPR 2.
+    // v8 is 65k tris. Skip the shadow map so the portal can stay at DPR 2.
     object.castShadow = false
     object.receiveShadow = quality.shadows
   })
 }
 
 /**
- * Sparse frost scratches. The disc itself stays clear: a filled grid read as a cream window.
+ * Many short frost scratches on a cool, nearly clear disc. A handful of strokes
+ * disappeared at DPR 1.
  */
 function latticeDisc() {
   const material = new MeshBasicMaterial({
@@ -152,28 +153,28 @@ function latticeDisc() {
         {
           vec2 p = vLattice.xy;
           float radius = length(p);
-          float disc = 1.0 - smoothstep(1.22, 1.46, radius);
+          float disc = 1.0 - smoothstep(1.2, 1.46, radius);
           float scratch = 0.0;
-          for (int i = 0; i < 14; i++) {
-            float seed = float(i) + 1.0;
-            float ang = hash11(seed * 3.1) * 6.28318;
+          for (int i = 0; i < 110; i++) {
+            float seed = float(i) + 1.7;
+            float ang = hash11(seed * 1.7) * 6.28318;
             vec2 dir = vec2(cos(ang), sin(ang));
-            vec2 origin = vec2(hash11(seed * 5.7), hash11(seed * 8.3)) * 2.2 - 1.1;
+            vec2 origin = vec2(hash11(seed * 4.1), hash11(seed * 9.3)) * 2.3 - 1.15;
             vec2 rel = p - origin;
             float along = dot(rel, dir);
             float across = abs(dot(rel, vec2(-dir.y, dir.x)));
-            float halfLen = 0.18 + hash11(seed * 2.2) * 0.62;
-            float alongMask = 1.0 - smoothstep(halfLen * 0.72, halfLen, abs(along));
-            float width = 0.0035 + hash11(seed * 4.4) * 0.004;
-            float acrossMask = 1.0 - smoothstep(width, width * 2.4, across);
-            scratch = max(scratch, alongMask * acrossMask);
+            float halfLen = 0.05 + hash11(seed * 2.9) * 0.22;
+            float alongMask = 1.0 - smoothstep(halfLen * 0.55, halfLen, abs(along));
+            float width = 0.0016 + hash11(seed * 6.1) * 0.0028;
+            float acrossMask = 1.0 - smoothstep(width, width * 2.1, across);
+            scratch = max(scratch, alongMask * acrossMask * (0.55 + hash11(seed * 8.8) * 0.45));
           }
-          gl_FragColor.rgb = vec3(0.78, 0.84, 0.9);
-          gl_FragColor.a = disc * scratch * 0.72;
+          gl_FragColor.rgb = vec3(0.70, 0.76, 0.84);
+          gl_FragColor.a = disc * max(scratch * 0.92, 0.075);
         }`,
       )
   }
-  material.customProgramCacheKey = () => 'lattice-disc-v9'
+  material.customProgramCacheKey = () => 'lattice-disc-v10'
   return material
 }
 

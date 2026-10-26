@@ -11,6 +11,8 @@ export type ProjectedLabel = {
   visible: boolean
   bent: boolean
   constellation?: boolean
+  /** False for margin text. A leader from the margin crossed the whole hero. */
+  lead?: boolean
 }
 
 export type Overlay = {
@@ -284,8 +286,9 @@ export function mountOverlay(): Overlay {
         }
         tag.style.opacity = label.opacity.toFixed(3)
         tag.style.transform = `translate(${label.labelX}px, ${label.labelY}px) translate(-50%, -50%)`
-        line.style.opacity = String(label.opacity * 0.9)
-        dot.style.opacity = String(label.opacity)
+        const showLead = label.lead !== false
+        line.style.opacity = showLead ? String(label.opacity * 0.9) : '0'
+        dot.style.opacity = showLead ? String(label.opacity) : '0'
         const elbow = label.bent ? `${label.labelX.toFixed(1)},${label.anchorY.toFixed(1)} ` : ''
         line.setAttribute(
           'points',
