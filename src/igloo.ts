@@ -316,13 +316,15 @@ function dressSnow(
   const existing = shared.get('snow')
   if (existing) return existing
   const entry = source.clone()
+  const lit = bakedLights(baked)
   // Faces only. The seam lives in the emissive map, so this does not dim the gaps.
   // A baked albedo is already the paint, so the 0.66 face scale stays off it.
-  if (baked?.albedo) entry.color.set('#ffffff')
+  if (lit) entry.color.set('#ffffff')
   else entry.color.multiplyScalar(0.66)
-  entry.emissive.setRGB(1, 1, 1)
-  entry.emissiveIntensity = EMISSIVE_INTENSITY
-  entry.normalScale.set(1.35, 1.35)
+  if (lit && baked?.emissive) entry.emissive.setRGB(baked.emissive[0], baked.emissive[1], baked.emissive[2])
+  else entry.emissive.setRGB(1, 1, 1)
+  entry.emissiveIntensity = lit && baked?.emissiveIntensity != null ? baked.emissiveIntensity : EMISSIVE_INTENSITY
+  entry.normalScale.set(lit ? 1 : 1.35, lit ? 1 : 1.35)
   assignBakedMaps(entry, baked, renderer)
   const anisotropy = renderer.capabilities.getMaxAnisotropy()
   for (const map of [entry.map, entry.normalMap, entry.roughnessMap, entry.aoMap, entry.emissiveMap, entry.metalnessMap, entry.lightMap]) {
@@ -348,18 +350,24 @@ function dressSnow(
     prior.call(entry, shader, renderer)
     shader.uniforms.uSolid = uniforms.uSolid
     shader.uniforms.uBurst = uniforms.uBurst
-    if (bakedLights(baked)) shader.fragmentShader = bakeLightShader(shader.fragmentShader)
-    shader.fragmentShader = shader.fragmentShader
-      .replace(
-        '#include <common>',
-        `#include <common>
-        uniform float uSolid;
-        uniform float uBurst;`,
-      )
-      .replace(
-        '#include <emissivemap_fragment>',
-        `#include <emissivemap_fragment>
-        #ifdef USE_EMISSIVEMAP
+    if (lit) shader.fragmentShader = bakeLightShader(shader.fragmentShader)
+    const seam = lit
+      ? `#ifdef USE_EMISSIVEMAP
+          vec2 seamDx = dFdx(vEmissiveMapUv) * 0.55;
+          vec2 seamDy = dFdy(vEmissiveMapUv) * 0.55;
+          vec3 seamWide = totalEmissiveRadiance;
+          seamWide = max(seamWide, emissive * texture2D(emissiveMap, vEmissiveMapUv + seamDx).rgb);
+          seamWide = max(seamWide, emissive * texture2D(emissiveMap, vEmissiveMapUv - seamDx).rgb);
+          seamWide = max(seamWide, emissive * texture2D(emissiveMap, vEmissiveMapUv + seamDy).rgb);
+          seamWide = max(seamWide, emissive * texture2D(emissiveMap, vEmissiveMapUv - seamDy).rgb);
+          totalEmissiveRadiance = seamWide;
+        #endif
+        float seam = max(totalEmissiveRadiance.r, max(totalEmissiveRadiance.g, totalEmissiveRadiance.b));
+        float core = smoothstep(0.55, 0.9, seam);
+        totalEmissiveRadiance *= mix(0.12, 1.0, core);
+        totalEmissiveRadiance *= 1.0 - smoothstep(0.0, 0.28, uBurst);
+        totalEmissiveRadiance *= smoothstep(0.15, 0.7, uSolid);`
+      : `#ifdef USE_EMISSIVEMAP
           vec2 seamDx = dFdx(vEmissiveMapUv) * 1.8;
           vec2 seamDy = dFdy(vEmissiveMapUv) * 1.8;
           vec3 seamWide = totalEmissiveRadiance;
@@ -375,11 +383,17 @@ function dressSnow(
         float hot = smoothstep(3.05, 4.3, seam * mix(0.82, 1.7, gap));
         totalEmissiveRadiance *= mix(1.0, 0.74, hot);
         totalEmissiveRadiance *= 1.0 - smoothstep(0.0, 0.28, uBurst);
-        totalEmissiveRadiance *= smoothstep(0.15, 0.7, uSolid);`,
+        totalEmissiveRadiance *= smoothstep(0.15, 0.7, uSolid);`
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        uniform float uSolid;
+        uniform float uBurst;`,
       )
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${seam}`)
   }
-  const bakedKey = bakedLights(baked) ? '-baked' : ''
-  entry.customProgramCacheKey = () => `${priorKey()}-igloo-v16${bakedKey}`
+  entry.customProgramCacheKey = () => `${priorKey()}${lit ? '-igloo-v17-baked' : '-igloo-v16'}`
   solidUniforms.push(uniforms.uSolid)
   burstUniforms.push(uniforms.uBurst)
   shared.set('snow', entry)

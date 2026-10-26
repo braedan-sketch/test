@@ -1,5 +1,4 @@
 import {
-  LinearSRGBColorSpace,
   MeshStandardMaterial,
   NoColorSpace,
   SRGBColorSpace,
@@ -9,38 +8,34 @@ import {
 import { loadKtx2, publicUrl } from './heroModel'
 
 /**
- * handoff_hero_v1, dropped in public/models/hero/.
+ * handoff_hero_v1, in public/models/hero/. Baked is the default hero.
+ * ?baked=0 keeps the realtime igloo and terrain. File names stay put so a
+ * darker albedo drop can replace the KTX2s without a code change.
  *
- * Optional hero.json lists the files. Without it, the loader probes the
- * default names below. Paths are relative to /models/hero/ unless they
- * start with /. Maps are KTX2.
- *
- *   igloo_light.ktx2     UV2 illuminance (glTF TEXCOORD_1, texture.channel 1)
- *   igloo_ao.ktx2        UV2 ambient occlusion, red channel, linear
- *   igloo_seam.ktx2      emissive seam mask, UV0, linear. The realtime seam
- *                        curve and bloom stay on top of this mask.
- *   igloo_albedo.ktx2    optional base color, UV0, sRGB. Not a beauty pass
- *                        when a lightmap is also present.
- *   terrain_light.ktx2 / terrain_ao.ktx2 / terrain_albedo.ktx2
- *
- * Optional "model" replaces /models/igloo.glb or /models/terrain.glb. The
- * igloo file still needs one mesh per brick, translation only, extras
- * row/t/kind/bidx, so separation can keep moving nodes. Put the lightmap
- * on UV2. ?baked=1 with none of these files keeps the realtime hero.
+ * hero.json is the manifest. Without it, the loader uses the names below.
+ * Lightmaps and the seam mask are sRGB. AO is linear. Light and AO are on
+ * glTF TEXCOORD_1 (three.js channel 1). Seam and albedo are on UV0.
  */
 const HERO_ROOT = '/models/hero/'
 
 const DEFAULT_IGLOO = {
-  light: 'igloo_light.ktx2',
-  ao: 'igloo_ao.ktx2',
-  seam: 'igloo_seam.ktx2',
+  glb: 'igloo.glb',
+  lightMap: 'igloo_lightmap.ktx2',
+  aoMap: 'igloo_ao.ktx2',
+  seamMask: 'igloo_seam_mask.ktx2',
   albedo: 'igloo_albedo.ktx2',
+  lightMapIntensity: 55.832,
+  aoMapIntensity: 0.25,
+  emissiveIntensity: 2.8,
+  emissive: [0.93, 0.96, 1],
 }
 
 const DEFAULT_TERRAIN = {
-  light: 'terrain_light.ktx2',
-  ao: 'terrain_ao.ktx2',
-  albedo: 'terrain_albedo.ktx2',
+  glb: 'terrain.glb',
+  lightMap: 'ground_lightmap.ktx2',
+  aoMap: 'ground_ao.ktx2',
+  lightMapIntensity: 38.625,
+  aoMapIntensity: 0.25,
 }
 
 export type BakedSlot = {
@@ -51,6 +46,8 @@ export type BakedSlot = {
   albedo: Texture | null
   lightIntensity: number
   aoIntensity: number
+  emissive: [number, number, number] | null
+  emissiveIntensity: number | null
 }
 
 export type BakedHandoff = {
@@ -61,16 +58,26 @@ export type BakedHandoff = {
 
 type ManifestEntry = {
   model?: unknown
+  glb?: unknown
   light?: unknown
+  lightMap?: unknown
   ao?: unknown
+  aoMap?: unknown
   seam?: unknown
+  seamMask?: unknown
   albedo?: unknown
   lightChannel?: unknown
+  lightMapChannel?: unknown
   aoChannel?: unknown
+  aoMapChannel?: unknown
   seamChannel?: unknown
   albedoChannel?: unknown
   lightIntensity?: unknown
+  lightMapIntensity?: unknown
   aoIntensity?: unknown
+  aoMapIntensity?: unknown
+  emissive?: unknown
+  emissiveIntensity?: unknown
 }
 
 export function emptyBakedSlot(): BakedSlot {
@@ -82,6 +89,8 @@ export function emptyBakedSlot(): BakedSlot {
     albedo: null,
     lightIntensity: 1,
     aoIntensity: 1,
+    emissive: null,
+    emissiveIntensity: null,
   }
 }
 
@@ -103,8 +112,8 @@ export function describeBaked(handoff: BakedHandoff | null) {
 }
 
 /**
- * Drop hemisphere and direct light so a UV2 lightmap is not added on top of
- * the live sun. The emissive seam is a different term and stays.
+ * The lightmap already holds the sun, sky and GI. Drop the live lights so
+ * they are not added again. The emissive seam is a separate term.
  */
 export function bakeLightShader(fragment: string) {
   return fragment
@@ -118,28 +127,26 @@ export function bakeLightShader(fragment: string) {
     .replace(
       '#include <lights_fragment_end>',
       `#include <lights_fragment_end>
-      reflectedLight.directDiffuse *= 0.05;
-      reflectedLight.directSpecular *= 0.02;
-      reflectedLight.indirectSpecular *= 0.04;`,
+      reflectedLight.directDiffuse *= 0.0;
+      reflectedLight.directSpecular *= 0.0;
+      reflectedLight.indirectSpecular *= 0.0;`,
     )
 }
 
 export function assignBakedMaps(material: MeshStandardMaterial, slot: BakedSlot | null, renderer: WebGLRenderer) {
   if (!slot) return false
   const anisotropy = renderer.capabilities.getMaxAnisotropy()
-  const bind = (texture: Texture | null, color: 'albedo' | 'light' | 'data') => {
+  const bind = (texture: Texture | null, color: 'srgb' | 'linear') => {
     if (!texture) return
     texture.flipY = false
     texture.anisotropy = anisotropy
-    if (color === 'albedo' && texture.colorSpace === NoColorSpace) texture.colorSpace = SRGBColorSpace
-    if (color === 'light' && texture.colorSpace === NoColorSpace) texture.colorSpace = LinearSRGBColorSpace
-    if (color === 'data') texture.colorSpace = NoColorSpace
+    texture.colorSpace = color === 'srgb' ? SRGBColorSpace : NoColorSpace
     texture.needsUpdate = true
   }
-  bind(slot.light, 'light')
-  bind(slot.ao, 'data')
-  bind(slot.seam, 'data')
-  bind(slot.albedo, 'albedo')
+  bind(slot.light, 'srgb')
+  bind(slot.ao, 'linear')
+  bind(slot.seam, 'srgb')
+  bind(slot.albedo, 'srgb')
   if (slot.light) {
     material.lightMap = slot.light
     material.lightMapIntensity = slot.lightIntensity
@@ -166,9 +173,8 @@ export type BakedPlan = {
 }
 
 /**
- * ?baked=1. The manifest (or its absence) resolves before the KTX2 files,
- * so the glb download can run alongside the maps. Missing files leave the
- * realtime materials in place.
+ * The manifest resolves before the KTX2 files, so the glb download runs
+ * alongside the maps. A missing handoff leaves the realtime materials.
  */
 export function startBakedPlan(renderer: WebGLRenderer): BakedPlan {
   const manifestP = readManifest()
@@ -195,7 +201,7 @@ export function startBakedPlan(renderer: WebGLRenderer): BakedPlan {
 }
 
 function namedModel(entry: ManifestEntry) {
-  const file = fileOf(entry.model)
+  const file = fileOf(entry.glb ?? entry.model)
   return file ? heroFile(file) : null
 }
 
@@ -218,22 +224,24 @@ async function readManifest(): Promise<{ igloo?: ManifestEntry; terrain?: Manife
 
 async function loadSlot(entry: ManifestEntry, renderer: WebGLRenderer): Promise<BakedSlot> {
   const slot = emptyBakedSlot()
-  slot.lightIntensity = numberOr(entry.lightIntensity, 1)
-  slot.aoIntensity = numberOr(entry.aoIntensity, 1)
-  const model = fileOf(entry.model)
+  slot.lightIntensity = numberOr(entry.lightMapIntensity ?? entry.lightIntensity, 1)
+  slot.aoIntensity = numberOr(entry.aoMapIntensity ?? entry.aoIntensity, 1)
+  slot.emissive = rgbOf(entry.emissive)
+  slot.emissiveIntensity = entry.emissiveIntensity == null ? null : numberOr(entry.emissiveIntensity, 2.8)
+  const model = fileOf(entry.glb ?? entry.model)
   slot.model = model ? heroFile(model) : null
   const [light, ao, seam, albedo] = await Promise.all([
-    loadMap(entry.light, renderer),
-    loadMap(entry.ao, renderer),
-    loadMap(entry.seam, renderer),
+    loadMap(entry.lightMap ?? entry.light, renderer),
+    loadMap(entry.aoMap ?? entry.ao, renderer),
+    loadMap(entry.seamMask ?? entry.seam, renderer),
     loadMap(entry.albedo, renderer),
   ])
   slot.light = light
   slot.ao = ao
   slot.seam = seam
   slot.albedo = albedo
-  applyChannel(slot.light, entry.lightChannel, 1)
-  applyChannel(slot.ao, entry.aoChannel, 1)
+  applyChannel(slot.light, entry.lightMapChannel ?? entry.lightChannel, 1)
+  applyChannel(slot.ao, entry.aoMapChannel ?? entry.aoChannel, 1)
   applyChannel(slot.seam, entry.seamChannel, 0)
   applyChannel(slot.albedo, entry.albedoChannel, 0)
   return slot
@@ -263,4 +271,11 @@ function fileOf(value: unknown) {
 function numberOr(value: unknown, fallback: number) {
   const number = Number(value)
   return Number.isFinite(number) ? number : fallback
+}
+
+function rgbOf(value: unknown): [number, number, number] | null {
+  if (!Array.isArray(value) || value.length < 3) return null
+  const rgb = [Number(value[0]), Number(value[1]), Number(value[2])]
+  if (rgb.some((channel) => !Number.isFinite(channel))) return null
+  return [rgb[0] ?? 1, rgb[1] ?? 1, rgb[2] ?? 1]
 }

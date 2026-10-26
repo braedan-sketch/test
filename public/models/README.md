@@ -110,11 +110,9 @@ CRYSTAL
   - The stone still reads as soft clay/foam, not their crisp carved stone.
   - Our scene is darker and bluer than their pale frosted look overall.
 
-## handoff_hero_v1 (baked hero, `?baked=1`)
+## handoff_hero_v1 (baked hero, default)
 
-Drop files in `public/models/hero/`. The page only reads them when the URL has `?baked=1`. Until the files exist, that flag keeps the realtime igloo and terrain.
-
-Optional `hero.json` names the files. Without it, the loader probes the defaults. Paths are relative to this folder unless they start with `/`. Every map is KTX2.
+Drop files in `public/models/hero/`. That folder is the default hero. `?baked=0` keeps the realtime igloo and terrain. `hero.json` names the files. Paths are relative to this folder unless they start with `/`. Every map is KTX2. Lightmaps are sRGB on UV1. AO is linear on UV1. Seam and albedo are sRGB on UV0. GROUND is lightmapped. SKIRT stays realtime. Mountains stay `mountains.glb`.
 
 ```json
 {

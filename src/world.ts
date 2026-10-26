@@ -93,11 +93,12 @@ export function createWorld(
       if (!mesh.isMesh) return
       mesh.frustumCulled = false
       mesh.receiveShadow = quality.shadows
-      if (!missingUv && baked?.light && !mesh.geometry.getAttribute('uv1')) {
+      const skirt = mesh.name.toUpperCase() === 'SKIRT'
+      if (!skirt && !missingUv && baked?.light && !mesh.geometry.getAttribute('uv1')) {
         missingUv = true
         console.warn('[baked] terrain lightmap expects UV2 (glTF TEXCOORD_1). This mesh has no uv1.')
       }
-      for (const entry of materialsOf(mesh)) gradeSurface(entry, 'terrain', renderer, baked)
+      for (const entry of materialsOf(mesh)) gradeSurface(entry, 'terrain', renderer, skirt ? null : baked)
       terrainMeshes.push(mesh)
     })
     terrainRoot.add(hero)
@@ -170,7 +171,7 @@ function gradeSurface(
   const prior = entry.onBeforeCompile
   const priorKey = entry.customProgramCacheKey.bind(entry)
   const lit = kind === 'terrain' && bakedLights(baked)
-  const curve = kind === 'terrain' && baked?.albedo ? '1.0' : kind === 'terrain' ? '1.02' : '0.96'
+  const curve = lit ? '1.0' : kind === 'terrain' ? '1.02' : '0.96'
   const gain = kind === 'terrain' ? '1.0' : '1.04'
   entry.onBeforeCompile = (shader, renderer) => {
     prior.call(entry, shader, renderer)

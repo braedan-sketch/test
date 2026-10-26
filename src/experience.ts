@@ -136,7 +136,7 @@ export async function startExperience(overlay: Overlay) {
       overlay.setProgress(shown)
     }
   })
-  const bakedOn = new URLSearchParams(window.location.search).get('baked') === '1'
+  const bakedOn = new URLSearchParams(window.location.search).get('baked') !== '0'
   const bakedPlan = bakedOn ? startBakedPlan(renderer) : null
   const iglooPromise = loadIgloo(
     quality,
@@ -451,10 +451,10 @@ export async function startExperience(overlay: Overlay) {
       rings.update(phase.ringsT, phase.ringsShown)
       figure.update(phase.figureAppear, phase.figureBlow, clock, dpr)
 
-      applyCamera(phase, pos, target, up, camera, clock)
+      applyCamera(phase, pos, target, up, camera, clock, bakedOn)
       dof.target = phase.screen === 'field' ? focusPoint : target
       dof.bokehScale = phase.screen === 'field' || phase.screen === 'rift' ? 0 : softGpu ? 0.08 : 0.12
-      applyGrade(phase, bloom, chromatic, warp, tone, vignette, frost, camera.aspect)
+      applyGrade(phase, bloom, chromatic, warp, tone, vignette, frost, camera.aspect, bakedOn)
       // Field grain is animated inside NoiseEffect (rand(uv * (1 + time))).
       // 0.02 read as 0.23 HF std. This is the low-cost film grain on the hero.
       noise.blendMode.setOpacity(phase.screen === 'field' ? 0.16 : 0.08)
@@ -657,40 +657,48 @@ function readPhase(global: number, marks: Marks): Phase {
   }
 }
 
-function applyCamera(phase: Phase, pos: Vector3, target: Vector3, up: Vector3, camera: PerspectiveCamera, time: number) {
+function applyCamera(
+  phase: Phase,
+  pos: Vector3,
+  target: Vector3,
+  up: Vector3,
+  camera: PerspectiveCamera,
+  time: number,
+  bakedHero: boolean,
+) {
   up.set(0, 1, 0)
   const aspect = Math.max(0.2, camera.aspect)
   let fov = 40
   if (phase.screen === 'field' || (phase.screen === 'rift' && phase.riftT < 0.02)) {
-    fov = 40
-    // Wire and solid share this 3/4 eye pose, so the lines dissolve into the ice in place.
-    target.set(EYE_TARGET[0], EYE_TARGET[1], EYE_TARGET[2])
+    // Wire and solid share this pose, so the lines dissolve into the ice in place.
+    // The baked hero sits at 68 mm, slightly left. Burst eases back to the wide eye so the bricks stay in frame.
+    fov = placeFieldEye(pos, target, aspect, phase.burst, bakedHero)
     up.set(0, 1, 0)
-    const span = phase.burst
-    const eyeWidth = lerp(4.4, 5.05, span)
-    const eyeHeight = lerp(2.75, 3.2, span)
-    const dEye =
-      aspect >= 1
-        ? desktopEyeDistance(eyeWidth, eyeHeight, aspect, fov) * 0.72
-        : fitBox(eyeWidth, eyeHeight, 0.78, 0.58, aspect, fov)
-    placeAlong(pos, EYE_TARGET, EYE_DIR, dEye)
-    // Look beside the dome so it sits in the centre-right third. Portrait is unchanged.
-    if (aspect >= 1) aimSubjectRight(target, pos, 0.16, aspect, fov)
   } else if (phase.screen === 'rift') {
-    fov = 36
     const hold = crystalHold(aspect)
     const crystalLook: [number, number, number] = [meteorCenter.x, crystalAimY(aspect, hold), meteorCenter.z]
     const crystalPos: [number, number, number] = [meteorCenter.x, meteorCenter.y, meteorCenter.z]
-    const riftEye =
-      aspect >= 1
-        ? desktopEyeDistance(5.05, 3.2, aspect, 40) * 0.72
-        : fitBox(5.05, 3.2, 0.78, 0.58, aspect, 40)
-    placeAlong(scratchA, EYE_TARGET, EYE_DIR, riftEye)
-    placeAlong(scratchB, crystalPos, CRYSTAL_DIR, hold)
     const riftBlend = smoother(phase.riftT)
-    mix3(target, EYE_TARGET, crystalLook, riftBlend)
-    pos.copy(scratchA).lerp(scratchB, riftBlend)
-    if (aspect >= 1) aimSubjectRight(target, pos, 0.16 * (1 - riftBlend), aspect, 40)
+    if (bakedHero && aspect >= 1) {
+      // Match the field camera at full burst, then travel to the crystal. A baked start here pops at riftT 0.02.
+      const startFov = placeFieldEye(scratchA, scratchB, aspect, 1, true)
+      poseC.set(crystalLook[0], crystalLook[1], crystalLook[2])
+      placeAlong(poseD, crystalPos, CRYSTAL_DIR, hold)
+      pos.copy(scratchA).lerp(poseD, riftBlend)
+      target.copy(scratchB).lerp(poseC, riftBlend)
+      fov = lerp(startFov, 36, riftBlend)
+    } else {
+      fov = 36
+      const riftEye =
+        aspect >= 1
+          ? desktopEyeDistance(5.05, 3.2, aspect, 40) * 0.72
+          : fitBox(5.05, 3.2, 0.78, 0.58, aspect, 40)
+      placeAlong(scratchA, EYE_TARGET, EYE_DIR, riftEye)
+      placeAlong(scratchB, crystalPos, CRYSTAL_DIR, hold)
+      mix3(target, EYE_TARGET, crystalLook, riftBlend)
+      pos.copy(scratchA).lerp(scratchB, riftBlend)
+      if (aspect >= 1) aimSubjectRight(target, pos, 0.16 * (1 - riftBlend), aspect, 40)
+    }
   } else if (phase.screen === 'meteor') {
     fov = 34
     const hold = crystalHold(aspect)
@@ -850,6 +858,45 @@ function brickScreenBounds(igloo: Igloo | null, camera: PerspectiveCamera, probe
   }
 }
 
+/** 36 mm sensor. Landscape locks the horizontal field to the focal length. */
+function lensVerticalFov(focalMm: number, aspect: number) {
+  const horizontal = 2 * Math.atan(18 / focalMm)
+  const vertical = 2 * Math.atan(Math.tan(horizontal / 2) / Math.max(aspect, 1))
+  return (vertical * 180) / Math.PI
+}
+
+const HERO_EYE: readonly [number, number, number] = [-11.2, 2.2, -9.8]
+const HERO_LOOK: readonly [number, number, number] = [0, 0.8, 0]
+
+function placeFieldEye(pos: Vector3, target: Vector3, aspect: number, burst: number, baked: boolean) {
+  const span = clamp(burst, 0, 1)
+  if (!(baked && aspect >= 1)) {
+    const fov = 40
+    target.set(EYE_TARGET[0], EYE_TARGET[1], EYE_TARGET[2])
+    const eyeWidth = lerp(4.4, 5.05, span)
+    const eyeHeight = lerp(2.75, 3.2, span)
+    const dEye =
+      aspect >= 1
+        ? desktopEyeDistance(eyeWidth, eyeHeight, aspect, fov) * 0.72
+        : fitBox(eyeWidth, eyeHeight, 0.78, 0.58, aspect, fov)
+    placeAlong(pos, EYE_TARGET, EYE_DIR, dEye)
+    if (aspect >= 1) aimSubjectRight(target, pos, 0.16, aspect, fov)
+    return fov
+  }
+  const heroFov = lensVerticalFov(68, aspect)
+  poseA.set(HERO_EYE[0], HERO_EYE[1], HERO_EYE[2])
+  poseB.set(HERO_LOOK[0], HERO_LOOK[1], HERO_LOOK[2])
+  aimSubjectRight(poseB, poseA, -0.07, aspect, heroFov)
+  const wideFov = 40
+  poseC.set(EYE_TARGET[0], EYE_TARGET[1], EYE_TARGET[2])
+  const dEye = desktopEyeDistance(5.05, 3.2, aspect, wideFov) * 0.72
+  placeAlong(poseD, EYE_TARGET, EYE_DIR, dEye)
+  aimSubjectRight(poseC, poseD, 0.16, aspect, wideFov)
+  pos.lerpVectors(poseA, poseD, span)
+  target.lerpVectors(poseB, poseC, span)
+  return lerp(heroFov, wideFov, span)
+}
+
 function desktopEyeDistance(width: number, height: number, aspect: number, fovDeg: number) {
   const portraitAspect = 390 / 844
   const portrait = fitBox(width, height, 0.83, 0.5, portraitAspect, fovDeg)
@@ -860,7 +907,7 @@ function desktopEyeDistance(width: number, height: number, aspect: number, fovDe
 }
 
 function aimSubjectRight(look: Vector3, pos: Vector3, fraction: number, aspect: number, fovDeg: number) {
-  if (fraction <= 0) return
+  if (fraction === 0) return
   const vHalf = (fovDeg * Math.PI) / 360
   const tanH = Math.tan(vHalf) * aspect
   const dx = look.x - pos.x
@@ -934,6 +981,7 @@ function applyGrade(
   vignette: VignetteEffect,
   frost: FrostEffect,
   aspect: number,
+  bakedHero: boolean,
 ) {
   // Gap light blooms on the hero. Crystal highlights stay under the threshold.
   if (tone.blendMode.blendFunction !== BlendFunction.SRC) tone.blendMode.blendFunction = BlendFunction.SRC
@@ -953,6 +1001,12 @@ function applyGrade(
     bloom.intensity = 0.06
     bloom.luminanceMaterial.threshold = 0.96
     bloom.mipmapBlurPass.radius = 0.08
+  } else if (heroGlow && bakedHero) {
+    // Lightmap faces sit well above 0.72 before AgX. Bloom only the seam peaks.
+    bloom.intensity = 0.42
+    bloom.luminanceMaterial.threshold = 1.35
+    bloom.luminanceMaterial.smoothing = 0.08
+    bloom.mipmapBlurPass.radius = 0.02
   } else if (heroGlow) {
     // Strength stays on the seams. The radius is shorter than build 36 so the slabs don't mip-blur.
     bloom.intensity = 0.72
