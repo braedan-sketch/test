@@ -37,7 +37,7 @@ type Piece = {
  * ease them apart along the ring and along their existing depth offset.
  */
 export async function createRings(quality: Quality, renderer?: WebGLRenderer): Promise<Rings> {
-  const asset = renderer ? await loadHero('/models/rings.glb', renderer) : null
+  const asset = renderer ? await loadHero('/models/rings.glb', renderer, { eager: true }) : null
   const root = asset ?? new Group()
   root.name = 'rings'
   // The portal is centred on its own origin and about 4.1 m across. Lift it
@@ -91,7 +91,8 @@ function dressPortal(root: Group, quality: Quality) {
   root.traverse((object) => {
     if (!(object instanceof Mesh)) return
     if (object.name === 'halo') {
-      object.material = fxMaterial(object.material, 5.6, new Color(0.86, 0.92, 1), AdditiveBlending, false)
+      // v5 already bakes a hot core and blue flares. A large gain turns the halo white.
+      object.material = fxMaterial(object.material, 1.25, new Color(0.92, 0.96, 1), AdditiveBlending, false)
       object.renderOrder = 5
       object.frustumCulled = false
       return
@@ -104,9 +105,10 @@ function dressPortal(root: Group, quality: Quality) {
     }
     const material = object.material
     if (!(material instanceof MeshStandardMaterial)) return
-    material.emissiveIntensity = 1.25
+    material.emissiveIntensity = 0.55
     material.metalness = 0
-    material.envMapIntensity = 0.35
+    material.envMapIntensity = 0.2
+    material.normalScale.set(0.22, 0.22)
     material.fog = true
     material.toneMapped = true
     object.castShadow = quality.shadows
@@ -114,7 +116,7 @@ function dressPortal(root: Group, quality: Quality) {
   })
 }
 
-/** v4's lattice is a subtle frosted disc. Lift its alpha so the disc reads, and keep the frost variation. */
+/** v5's lattice is already milky (alpha about 0.40–0.75). Keep that variation. */
 function latticeDisc(source: Material | Material[]) {
   const entry = Array.isArray(source) ? source[0] : source
   const map =
@@ -125,8 +127,8 @@ function latticeDisc(source: Material | Material[]) {
   }
   const material = new MeshStandardMaterial({
     map: map ?? undefined,
-    color: '#d5e3ef',
-    roughness: 0.48,
+    color: '#d5e2ec',
+    roughness: 0.62,
     metalness: 0,
     transparent: true,
     opacity: 1,
@@ -138,10 +140,10 @@ function latticeDisc(source: Material | Material[]) {
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <map_fragment>',
       `#include <map_fragment>
-       diffuseColor.a = mix(0.36, 0.82, clamp(diffuseColor.a * 2.1, 0.0, 1.0));`,
+       diffuseColor.a = clamp(diffuseColor.a * 1.06 + 0.02, 0.0, 0.9);`,
     )
   }
-  material.customProgramCacheKey = () => 'lattice-disc-v4b'
+  material.customProgramCacheKey = () => 'lattice-disc-v5'
   return material
 }
 

@@ -54,6 +54,7 @@ export function mountOverlay(): Overlay {
     throw new Error('Missing page shell')
   }
 
+  let pctHigh = 0
   document.title = brand.name
   document.querySelector('meta[name="description"]')?.setAttribute('content', `${brand.name} — ${brand.description}`)
   loaderName.textContent = brand.name
@@ -197,8 +198,10 @@ export function mountOverlay(): Overlay {
     sections,
     setProgress(value) {
       const clamped = Math.max(0, Math.min(1, value))
-      loaderBar.style.transform = `scaleX(${clamped})`
-      loaderPct.textContent = String(Math.round(clamped * 100)).padStart(2, '0')
+      const pct = Math.max(pctHigh, Math.round(clamped * 100))
+      pctHigh = pct
+      loaderBar.style.transform = `scaleX(${Math.max(clamped, pct / 100)})`
+      loaderPct.textContent = String(pct).padStart(2, '0')
     },
     fail(message) {
       loaderStatus.textContent = message

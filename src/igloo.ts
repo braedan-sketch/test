@@ -1,12 +1,16 @@
 import {
   BufferGeometry,
-  Float32BufferAttribute,
+  Color,
+  EdgesGeometry,
+  FrontSide,
   Group,
   LineBasicMaterial,
   LineSegments,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   PointLight,
+  SphereGeometry,
   Vector3,
   type Object3D,
   type WebGLRenderer,
@@ -26,7 +30,7 @@ const LABEL_OFFSETS: Array<[number, number]> = [
   [-13, 2],
 ]
 
-/** v11 bakes the seam light. Faces are darkened in the shader, not here. */
+/** v12 bakes a thin edge band. Intensity stays high so the shader can tell the band from the face glow. */
 const EMISSIVE_INTENSITY = 3.4
 
 export type LabelAnchor = {
@@ -87,8 +91,9 @@ export async function loadIgloo(
   const seen = new Set<Object3D>()
   const shared = new Map<string, MeshStandardMaterial>()
   const solidUniforms: Array<{ value: number }> = []
+  const burstUniforms: Array<{ value: number }> = []
   const wireMaterial = new LineBasicMaterial({
-    color: '#24303a',
+    color: '#e7eef3',
     transparent: true,
     opacity: 1,
     depthWrite: false,
@@ -103,11 +108,11 @@ export async function loadIgloo(
     object.frustumCulled = true
     const node = blockCarrier(object)
     const extras = readExtras(node.userData)
-    object.material = dressSnow(object.material, shared, solidUniforms)
+    object.material = dressSnow(object.material, shared, solidUniforms, burstUniforms)
 
     if (seen.has(node)) return
     seen.add(node)
-    const wire = new LineSegments(slabEdges(object.geometry), wireMaterial)
+    const wire = new LineSegments(brickEdges(object.geometry), wireMaterial)
     wire.name = 'igloo-wire'
     wire.renderOrder = 3
     wire.frustumCulled = false
@@ -137,9 +142,35 @@ export async function loadIgloo(
     uCenter: { value: new Vector3() },
   }
   const worldPoint = new Vector3()
-  const gapLight = new PointLight('#f3f6fb', 0, 4.6, 2)
-  gapLight.position.set(0, 0.9, 0)
+  const gapLight = new PointLight('#f4f7fb', 0, 3.2, 2)
+  gapLight.position.set(0, 0.85, 0.05)
   group.add(gapLight)
+  const innerLights = [
+    new PointLight('#f7fbff', 0, 3.4, 2),
+    new PointLight('#f3f7ff', 0, 2.6, 2),
+    new PointLight('#eef4ff', 0, 2.4, 2),
+  ]
+  innerLights[0]?.position.set(0, 0.7, 0)
+  innerLights[1]?.position.set(0.28, 1.2, 0.12)
+  innerLights[2]?.position.set(-0.22, 0.42, -0.08)
+  for (const light of innerLights) group.add(light)
+  const cavity = new Mesh(
+    new SphereGeometry(0.96, 28, 18),
+    new MeshBasicMaterial({
+      color: new Color().setRGB(5.5, 6.1, 6.8),
+      toneMapped: false,
+      fog: false,
+      side: FrontSide,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    }),
+  )
+  cavity.name = 'igloo-core'
+  cavity.position.set(0, 0.78, 0)
+  cavity.scale.set(1.08, 0.86, 1)
+  group.add(cavity)
+  const cavityMaterial = cavity.material
   const snowMaterials = [...shared.values()]
 
   return {
@@ -151,9 +182,16 @@ export async function loadIgloo(
       uniforms.uSolid.value = solid
       uniforms.uDissolve.value = dissolve
       for (const slot of solidUniforms) slot.value = solid
+      for (const slot of burstUniforms) slot.value = burst
       group.visible = dissolve < 0.985
       const present = smoother(clamp(solid * 1.15, 0, 1)) * (1 - smoother(dissolve))
-      gapLight.intensity = present * 0.85
+      const flood = present * (1 - smoother(burst))
+      gapLight.intensity = flood * 6
+      const gains = [22, 14, 11]
+      innerLights.forEach((light, index) => {
+        light.intensity = flood * (gains[index] ?? 8)
+      })
+      if (cavityMaterial instanceof MeshBasicMaterial) cavityMaterial.opacity = flood
       // Stops 00–01 stay wire. The solid writes nothing and casts nothing, so it
       // cannot leave a black disc in the snow under the dome.
       const fade = smoother(clamp((solid - 0.04) / 0.26, 0, 1))
@@ -217,14 +255,15 @@ function dressSnow(
   material: Mesh['material'],
   shared: Map<string, MeshStandardMaterial>,
   solidUniforms: Array<{ value: number }>,
+  burstUniforms: Array<{ value: number }>,
 ) {
   const source = Array.isArray(material) ? material[0] : material
   if (!(source instanceof MeshStandardMaterial)) return material
   const existing = shared.get('snow')
   if (existing) return existing
   const entry = source.clone()
-  // v11 faces are already the darker ice. Scale them down once so the seams stay brighter.
-  entry.color.multiplyScalar(0.5)
+  // v12 faces already carry the per-block ice tone. Keep them near that bake.
+  entry.color.multiplyScalar(0.62)
   entry.emissive.setRGB(1, 1, 1)
   entry.emissiveIntensity = EMISSIVE_INTENSITY
   entry.metalness = 0
@@ -237,174 +276,45 @@ function dressSnow(
   entry.opacity = 0
   entry.colorWrite = false
   entry.depthWrite = false
-  const uniforms = { uSolid: { value: 0 } }
+  const uniforms = { uSolid: { value: 0 }, uBurst: { value: 0 } }
   const prior = entry.onBeforeCompile
   const priorKey = entry.customProgramCacheKey.bind(entry)
   entry.onBeforeCompile = (shader, renderer) => {
     prior.call(entry, shader, renderer)
     shader.uniforms.uSolid = uniforms.uSolid
+    shader.uniforms.uBurst = uniforms.uBurst
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
         `#include <common>
-        uniform float uSolid;`,
+        uniform float uSolid;
+        uniform float uBurst;`,
       )
       .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
         float seam = max(totalEmissiveRadiance.r, max(totalEmissiveRadiance.g, totalEmissiveRadiance.b));
-        totalEmissiveRadiance *= mix(0.35, 1.0, smoothstep(1.1, 2.2, seam));
+        float band = smoothstep(1.05, 2.5, seam);
+        totalEmissiveRadiance *= mix(0.18, 0.04, band);
+        totalEmissiveRadiance *= 1.0 - smoothstep(0.02, 0.42, uBurst);
         totalEmissiveRadiance *= smoothstep(0.15, 0.7, uSolid);`,
       )
   }
-  entry.customProgramCacheKey = () => `${priorKey()}-igloo-v11`
+  entry.customProgramCacheKey = () => `${priorKey()}-igloo-v12`
   solidUniforms.push(uniforms.uSolid)
+  burstUniforms.push(uniforms.uBurst)
   shared.set('snow', entry)
   return entry
 }
 
 /**
- * Twelve edges of the brick's own oriented box. Node rotation is identity;
- * the dome orientation is in the vertices, so a world-axis box reads as scaffolding.
+ * Long edges of the brick mesh, in the mesh's own local space.
+ * The line is parented to the brick, so it uses that brick's world matrix.
+ * Node rotation is identity and the dome lean is baked into the vertices;
+ * an oriented box fit on those vertices skewed each brick differently.
  */
-function slabEdges(geometry: BufferGeometry) {
-  const attr = geometry.getAttribute('position')
-  const geo = new BufferGeometry()
-  if (!attr || attr.count < 8) return geo
-  const count = attr.count
-  const step = Math.max(1, Math.floor(count / 480))
-  let sx = 0
-  let sy = 0
-  let sz = 0
-  let n = 0
-  for (let i = 0; i < count; i += step) {
-    sx += attr.getX(i)
-    sy += attr.getY(i)
-    sz += attr.getZ(i)
-    n += 1
-  }
-  const mx = sx / n
-  const my = sy / n
-  const mz = sz / n
-  let cxx = 0
-  let cyy = 0
-  let czz = 0
-  let cxy = 0
-  let cxz = 0
-  let cyz = 0
-  for (let i = 0; i < count; i += step) {
-    const x = attr.getX(i) - mx
-    const y = attr.getY(i) - my
-    const z = attr.getZ(i) - mz
-    cxx += x * x
-    cyy += y * y
-    czz += z * z
-    cxy += x * y
-    cxz += x * z
-    cyz += y * z
-  }
-  const axes = jacobiAxes([
-    [cxx, cxy, cxz],
-    [cxy, cyy, cyz],
-    [cxz, cyz, czz],
-  ])
-  const min = [Infinity, Infinity, Infinity]
-  const max = [-Infinity, -Infinity, -Infinity]
-  for (let i = 0; i < count; i += step) {
-    const x = attr.getX(i) - mx
-    const y = attr.getY(i) - my
-    const z = attr.getZ(i) - mz
-    for (let axis = 0; axis < 3; axis += 1) {
-      const basis = axes[axis]
-      if (!basis) continue
-      const projected = x * basis[0] + y * basis[1] + z * basis[2]
-      if (projected < min[axis]) min[axis] = projected
-      if (projected > max[axis]) max[axis] = projected
-    }
-  }
-  const corners: number[][] = []
-  for (let ix = 0; ix < 2; ix += 1) {
-    for (let iy = 0; iy < 2; iy += 1) {
-      for (let iz = 0; iz < 2; iz += 1) {
-        const px = ix ? max[0] : min[0]
-        const py = iy ? max[1] : min[1]
-        const pz = iz ? max[2] : min[2]
-        const ax = axes[0]
-        const ay = axes[1]
-        const az = axes[2]
-        if (!ax || !ay || !az) continue
-        corners.push([
-          mx + ax[0] * px + ay[0] * py + az[0] * pz,
-          my + ax[1] * px + ay[1] * py + az[1] * pz,
-          mz + ax[2] * px + ay[2] * py + az[2] * pz,
-        ])
-      }
-    }
-  }
-  const pairs = [0, 1, 2, 3, 4, 5, 6, 7, 0, 2, 1, 3, 4, 6, 5, 7, 0, 4, 1, 5, 2, 6, 3, 7]
-  const positions: number[] = []
-  for (let i = 0; i < pairs.length; i += 2) {
-    const a = corners[pairs[i] ?? 0]
-    const b = corners[pairs[i + 1] ?? 0]
-    if (!a || !b) continue
-    positions.push(a[0] ?? 0, a[1] ?? 0, a[2] ?? 0, b[0] ?? 0, b[1] ?? 0, b[2] ?? 0)
-  }
-  geo.setAttribute('position', new Float32BufferAttribute(positions, 3))
-  return geo
-}
-
-/** Eigenvectors of a symmetric 3×3, one axis per row. */
-function jacobiAxes(matrix: number[][]) {
-  const a = matrix.map((row) => [...row])
-  const v = [
-    [1, 0, 0],
-    [0, 1, 0],
-    [0, 0, 1],
-  ]
-  for (let sweep = 0; sweep < 14; sweep += 1) {
-    for (let p = 0; p < 3; p += 1) {
-      for (let q = p + 1; q < 3; q += 1) {
-        const apq = a[p]?.[q] ?? 0
-        if (Math.abs(apq) < 1e-12) continue
-        const app = a[p]?.[p] ?? 0
-        const aqq = a[q]?.[q] ?? 0
-        const tau = (aqq - app) / (2 * apq)
-        const sign = tau >= 0 ? 1 : -1
-        const t = sign / (Math.abs(tau) + Math.sqrt(1 + tau * tau))
-        const c = 1 / Math.sqrt(1 + t * t)
-        const s = t * c
-        if (a[p]) a[p][p] = c * c * app - 2 * s * c * apq + s * s * aqq
-        if (a[q]) a[q][q] = s * s * app + 2 * s * c * apq + c * c * aqq
-        if (a[p]) a[p][q] = 0
-        if (a[q]) a[q][p] = 0
-        for (let k = 0; k < 3; k += 1) {
-          if (k === p || k === q) continue
-          const akp = a[k]?.[p] ?? 0
-          const akq = a[k]?.[q] ?? 0
-          const rowP = c * akp - s * akq
-          const rowQ = s * akp + c * akq
-          if (a[k]) {
-            a[k][p] = rowP
-            a[k][q] = rowQ
-          }
-          if (a[p]) a[p][k] = rowP
-          if (a[q]) a[q][k] = rowQ
-        }
-        for (let k = 0; k < 3; k += 1) {
-          const vip = v[k]?.[p] ?? 0
-          const viq = v[k]?.[q] ?? 0
-          if (!v[k]) continue
-          v[k][p] = c * vip - s * viq
-          v[k][q] = s * vip + c * viq
-        }
-      }
-    }
-  }
-  return [0, 1, 2].map((axis) => {
-    const dir = [v[0]?.[axis] ?? 0, v[1]?.[axis] ?? 0, v[2]?.[axis] ?? 0]
-    const len = Math.hypot(dir[0] ?? 0, dir[1] ?? 0, dir[2] ?? 0) || 1
-    return dir.map((value) => (value ?? 0) / len)
-  })
+function brickEdges(geometry: BufferGeometry) {
+  return new EdgesGeometry(geometry, 46)
 }
 
 function blockCarrier(mesh: Mesh) {

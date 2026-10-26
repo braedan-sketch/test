@@ -21,7 +21,8 @@ import {
 import { loadHero } from './heroModel'
 import type { Quality } from './quality'
 
-const HAZE = new Color('#d5dee6')
+const HAZE = new Color('#e6eef2')
+const MIST = new Color('#e8eef3')
 
 let groundY = 0
 
@@ -32,7 +33,7 @@ export function sampleHeight(_x: number, _z: number) {
 
 export type World = {
   fog: FogExp2
-  update: (time: number, mood: number, wire?: number, field?: boolean) => void
+  update: (time: number, mood: number, wire?: number, field?: boolean, mist?: boolean) => void
   adoptGround: (object: Object3D | null) => void
 }
 
@@ -99,14 +100,15 @@ export function createWorld(scene: Scene, quality: Quality, renderer: WebGLRende
       object.position.y += groundY + 0.06 - box.min.y
       seated = true
     },
-    update(time, mood, wire = 0, field = true) {
-      const color = fogColor()
-      fog.color.copy(color)
-      fog.density = fogDensity(mood)
+    update(time, mood, wire = 0, field = true, mist = false) {
+      fog.color.copy(mist ? MIST : HAZE)
+      fog.density = mist ? 0.011 : fogDensity(mood)
       skyMat.uniforms.uMood!.value = mood
       skyMat.uniforms.uWire!.value = wire
-      // The mound and skirt stay under every scene so the ranges meet snow.
-      terrainRoot.visible = true
+      skyMat.uniforms.uMist!.value = mist ? 1 : 0
+      // The portal supplies its own pale backdrop. The mound stays for the field.
+      terrainRoot.visible = !mist
+      ranges.visible = !mist
       const showSnow = field && wire < 0.4
       if (showSnow) {
         if (!snow.group.parent) scene.add(snow.group)
@@ -134,19 +136,19 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
   if (Array.isArray(entry) || !(entry instanceof MeshStandardMaterial)) return
   entry.fog = true
   if (kind === 'terrain') {
-    // v8 snow is pale. A moderate grade keeps shadow in the mound.
-    entry.color.multiplyScalar(0.44)
+    // v9 bakes a darker grade. Lift it so the mound reads as snow under the dome.
+    entry.color.multiplyScalar(1.2)
     entry.roughness = 1
     entry.metalness = 0
     entry.roughnessMap = null
     entry.metalnessMap = null
     entry.envMapIntensity = 0
-    entry.normalScale.set(0.35, 0.35)
+    entry.normalScale.set(0.28, 0.28)
   }
   const prior = entry.onBeforeCompile
   const priorKey = entry.customProgramCacheKey.bind(entry)
-  const curve = kind === 'terrain' ? '1.42' : '1.08'
-  const gain = kind === 'terrain' ? '0.86' : '1.0'
+  const curve = kind === 'terrain' ? '0.9' : '0.96'
+  const gain = kind === 'terrain' ? '1.08' : '1.04'
   entry.onBeforeCompile = (shader, renderer) => {
     prior.call(entry, shader, renderer)
     shader.fragmentShader = shader.fragmentShader
@@ -164,20 +166,21 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
           : '#include <lights_fragment_end>',
       )
     if (kind === 'terrain') {
-      // v8 builds the mound and its flank rocks inside about 11 m. Flatten only
-      // the mid-distance spikes past that, and leave the pad and the far ranges.
+      // Lift the pad so the dome sits on a mound, and flatten only past the flank rocks.
       shader.vertexShader = shader.vertexShader.replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
          vec4 spikeWorld = modelMatrix * vec4(transformed, 1.0);
          float spikeR = length(spikeWorld.xz);
-         float spikeBand = smoothstep(14.0, 20.0, spikeR) * (1.0 - smoothstep(48.0, 72.0, spikeR));
-         float mound = -0.25 - smoothstep(14.0, 40.0, spikeR) * 0.4;
+         float perch = (1.0 - smoothstep(0.4, 7.5, spikeR)) * 0.32;
+         transformed.y += perch;
+         float spikeBand = smoothstep(16.0, 24.0, spikeR) * (1.0 - smoothstep(48.0, 72.0, spikeR));
+         float mound = -0.12 - smoothstep(16.0, 42.0, spikeR) * 0.45;
          transformed.y = mix(transformed.y, min(transformed.y, mound), spikeBand);`,
       )
     }
   }
-  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v9`
+  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v10`
 }
 
 function buildSky() {
@@ -186,7 +189,7 @@ function buildSky() {
     side: BackSide,
     depthWrite: false,
     fog: false,
-    uniforms: { uMood: { value: 0 }, uWire: { value: 0 } },
+    uniforms: { uMood: { value: 0 }, uWire: { value: 0 }, uMist: { value: 0 } },
     vertexShader: /* glsl */ `
       varying vec3 vDir;
       void main() {
@@ -198,18 +201,20 @@ function buildSky() {
       varying vec3 vDir;
       uniform float uMood;
       uniform float uWire;
+      uniform float uMist;
       void main() {
         vec3 d = normalize(vDir);
         float h = d.y;
-        vec3 zenith = vec3(0.58, 0.66, 0.74);
-        vec3 haze = vec3(0.74, 0.79, 0.84);
-        vec3 snow = vec3(0.70, 0.74, 0.78);
+        vec3 zenith = vec3(0.70, 0.77, 0.84);
+        vec3 haze = vec3(0.86, 0.90, 0.93);
+        vec3 snow = vec3(0.84, 0.88, 0.91);
         float above = smoothstep(-0.04, 0.55, h);
         vec3 color = mix(haze, zenith, above);
         float ground = smoothstep(0.12, -0.28, h);
         color = mix(color, snow, ground);
-        color = mix(color, haze, clamp(uMood, 0.0, 1.0) * 0.08);
-        color = mix(color, haze, uWire * 0.12);
+        color = mix(color, haze, clamp(uMood, 0.0, 1.0) * 0.06);
+        color = mix(color, haze, uWire * 0.1);
+        color = mix(color, vec3(0.91, 0.94, 0.96), uMist);
         gl_FragColor = vec4(color, 1.0);
       }
     `,
@@ -271,10 +276,6 @@ function buildSnow(count: number) {
   return { group, flakes, base, speed, x }
 }
 
-function fogColor() {
-  return HAZE
-}
-
 function fogDensity(mood: number) {
-  return mood > 1.2 ? 0.0034 : 0.0022
+  return mood > 1.2 ? 0.0022 : 0.00145
 }

@@ -63,8 +63,8 @@ declare global {
   }
 }
 
-// v11 dome top is 2.26.
-const EYE_TARGET: readonly [number, number, number] = [0.08, 1.12, 0.02]
+// v12 dome top is 2.37.
+const EYE_TARGET: readonly [number, number, number] = [0.08, 1.2, 0.02]
 const EYE_DIR: readonly [number, number, number] = [0.42, 0.18, 1.55]
 const CRYSTAL_DIR: readonly [number, number, number] = [0.22, 0.04, 1]
 // Upright bust, base on the ring at y 0, ears near y 2. Look slightly up at the chest.
@@ -129,7 +129,8 @@ export async function startExperience(overlay: Overlay) {
     frameBufferType: HalfFloatType,
     // MSAA on the real GPU softens the ring fringe. SwiftShader stalls on it,
     // and the loader never finishes, so that path keeps SMAA only.
-    multisampling: quality.low || softwareGpu(renderer) ? 0 : 4,
+    // MSAA softens brick edges. SMAA at the low preset keeps the fringe without that blur.
+    multisampling: 0,
   })
   const bloom = new BloomEffect({
     intensity: 0.15,
@@ -156,10 +157,10 @@ export async function startExperience(overlay: Overlay) {
     blendFunction: BlendFunction.OVERLAY,
     premultiply: true,
   })
-  noise.blendMode.setOpacity(0.34)
+  noise.blendMode.setOpacity(0.12)
   const vignette = new VignetteEffect({ darkness: 0.32, offset: 0.38 })
   const frost = new FrostEffect()
-  const smaa = quality.smaa ? new SMAAEffect({ preset: SMAAPreset.HIGH }) : null
+  const smaa = quality.smaa ? new SMAAEffect({ preset: SMAAPreset.LOW }) : null
   const normalPass = quality.low || softGpu ? null : new NormalPass(scene, camera, { resolutionScale: 0.75 })
   const ssao = normalPass
     ? new SSAOEffect(camera, normalPass.texture, {
@@ -174,9 +175,10 @@ export async function startExperience(overlay: Overlay) {
       })
     : null
   composer.addPass(new RenderPass(scene, camera))
-  if (normalPass && ssao) {
+  const ssaoPass = normalPass && ssao ? new EffectPass(camera, ssao) : null
+  if (normalPass && ssaoPass) {
     composer.addPass(normalPass)
-    composer.addPass(new EffectPass(camera, ssao))
+    composer.addPass(ssaoPass)
   }
   const tone = new ToneMappingEffect({ mode: ToneMappingMode.AGX })
   composer.addPass(new EffectPass(camera, bloom))
@@ -262,7 +264,7 @@ export async function startExperience(overlay: Overlay) {
 
   const pos = new Vector3()
   const target = new Vector3()
-  const focusPoint = new Vector3(0.08, 1.12, 0)
+  const focusPoint = new Vector3(0.08, 1.2, 0)
   // Field focus stays on the dome. Other scenes follow the look target.
   dof.target = focusPoint
   if (window.__blendy) {
@@ -347,7 +349,7 @@ export async function startExperience(overlay: Overlay) {
       shotLocks -= 1
     }
     if (!document.hidden) {
-      shown = lerp(shown, targetProgress, 0.35)
+      shown = Math.max(shown, lerp(shown, targetProgress, 0.35))
       if (!revealed) overlay.setProgress(shown)
       if (ready && shown > 0.985 && now - started > 550) reveal()
       // A multisampled frame blocks the Draco worker messages, so the igloo
@@ -363,7 +365,7 @@ export async function startExperience(overlay: Overlay) {
       const phase = readPhase(global, marks)
 
       const wire = phase.screen === 'field' ? 1 - smoother(phase.solid) : 0
-      world.update(now / 1000, phase.mood, wire, phase.screen === 'field')
+      world.update(now / 1000, phase.mood, wire, phase.screen === 'field', phase.screen === 'rings')
       clear.copy(world.fog.color)
       renderer.setClearColor(clear, 1)
       scene.environmentIntensity =
@@ -375,7 +377,9 @@ export async function startExperience(overlay: Overlay) {
               ? 0.22
               : 0.22
 
-      if (ssao) ssao.intensity = phase.screen === 'field' && phase.solid < 0.12 ? 0 : 0.85
+      const heroSharp = phase.screen === 'field' || phase.screen === 'rift'
+      if (normalPass) normalPass.enabled = !heroSharp
+      if (ssaoPass) ssaoPass.enabled = !heroSharp
       igloo?.update(phase.burst, phase.solid, phase.dissolve, reducedMotion ? 0 : now / 1000)
       meteor.update(phase.meteorReveal, reducedMotion ? 0 : now / 1000)
       const clock = reducedMotion ? 0 : now / 1000
@@ -857,7 +861,6 @@ function applyGrade(
   frost: FrostEffect,
   aspect: number,
 ) {
-  const burst = phase.screen === 'field' ? phase.burst : 0
   // Gap light blooms on the hero. Crystal highlights stay under the threshold.
   if (tone.blendMode.blendFunction !== BlendFunction.SRC) tone.blendMode.blendFunction = BlendFunction.SRC
   const figure = phase.screen === 'figure'
@@ -865,17 +868,18 @@ function applyGrade(
   const heroGlow = phase.screen === 'field' || phase.screen === 'rift'
   frost.setGrade(phase.screen === 'meteor' || figure ? 1 : 0)
   if (rings) {
-    bloom.intensity = 0.5
-    bloom.luminanceMaterial.threshold = 0.82
-    bloom.mipmapBlurPass.radius = 0.72
+    bloom.intensity = 0.22
+    bloom.luminanceMaterial.threshold = 0.9
+    bloom.mipmapBlurPass.radius = 0.16
   } else if (figure) {
     bloom.intensity = 0.08
     bloom.luminanceMaterial.threshold = 0.94
     bloom.mipmapBlurPass.radius = 0.35
   } else if (heroGlow) {
-    bloom.intensity = 0.32 + burst * 0.04
-    bloom.luminanceMaterial.threshold = 0.86
-    bloom.mipmapBlurPass.radius = 0.3
+    // Tight radius so the gap light blooms without mip-blurring the brick faces.
+    bloom.intensity = 0.85
+    bloom.luminanceMaterial.threshold = 0.7
+    bloom.mipmapBlurPass.radius = 0.18
   } else {
     bloom.intensity = 0.08
     bloom.luminanceMaterial.threshold = 0.96
@@ -884,7 +888,7 @@ function applyGrade(
   vignette.darkness = 0.55
   vignette.offset = 0.35
   const wireIntro = phase.screen === 'field' && phase.solid < 0.45
-  const fringe = wireIntro ? 0 : 0.0011 + (phase.chroma > 0.02 ? phase.chroma * 0.001 : 0)
+  const fringe = wireIntro || rings ? 0 : 0.0011 + (phase.chroma > 0.02 ? phase.chroma * 0.001 : 0)
   chromatic.offset.set(fringe, fringe * 0.45)
   warp.setWarp(phase.ripple, phase.blur, phase.glitch, phase.white, phase.riftT + phase.figureT, aspect)
 }

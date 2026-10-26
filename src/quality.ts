@@ -52,7 +52,7 @@ export function detectQuality(): Quality {
 
   return {
     low: false,
-    dprCap: 1.5,
+    dprCap: 2,
     snow: 280,
     terrainSeg: 110,
     blockTransmission: true,

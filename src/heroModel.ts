@@ -11,8 +11,6 @@ const heroManager = new LoadingManager()
 const heroBytes = new Map<string, { loaded: number; total: number }>()
 let heroProgressListener: ((value: number) => void) | null = null
 let heroProgressHigh = 0
-let heroItemsLoaded = 0
-let heroItemsTotal = 0
 
 function emitHeroProgress() {
   let loaded = 0
@@ -23,15 +21,11 @@ function emitHeroProgress() {
     total += slot.total
   }
   const bytes = total > 0 ? Math.min(1, loaded / total) : 0
-  const items = heroItemsTotal > 0 ? heroItemsLoaded / heroItemsTotal : 0
-  const value = Math.max(bytes, items)
-  heroProgressHigh = Math.max(heroProgressHigh, value)
+  heroProgressHigh = Math.max(heroProgressHigh, bytes)
   heroProgressListener?.(heroProgressHigh)
 }
 
-heroManager.onProgress = (_url, loaded, total) => {
-  heroItemsLoaded = loaded
-  heroItemsTotal = total
+heroManager.onProgress = () => {
   emitHeroProgress()
 }
 heroManager.onLoad = () => emitHeroProgress()
@@ -91,8 +85,8 @@ export async function loadHero(
   try {
     const buffer = await readWithProgress(url, (loaded, total) => {
       const slot = heroBytes.get(url) ?? { loaded: 0, total: 0 }
-      slot.loaded = loaded
-      if (total > 0) slot.total = total
+      slot.loaded = Math.max(slot.loaded, loaded)
+      if (total > 0) slot.total = Math.max(slot.total, total)
       heroBytes.set(url, slot)
       emitHeroProgress()
       if (options?.onProgress && slot.total > 0) options.onProgress(slot.loaded / slot.total)
@@ -118,16 +112,9 @@ export async function loadHero(
 
 /** Stream the file so the loader sees bytes as they arrive, including embedded KTX2. */
 async function readWithProgress(url: string, onBytes: (loaded: number, total: number) => void) {
-  let total = 0
-  try {
-    const head = await fetch(url, { method: 'HEAD' })
-    total = Number(head.headers.get('content-length')) || 0
-  } catch {
-    total = 0
-  }
   const response = await fetch(url)
   if (!response.ok) throw new Error(`Failed to fetch ${url}`)
-  if (total <= 0) total = Number(response.headers.get('content-length')) || 0
+  let total = Number(response.headers.get('content-length')) || 0
   const reader = response.body?.getReader()
   if (!reader) {
     const buffer = await response.arrayBuffer()
