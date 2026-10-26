@@ -895,7 +895,10 @@ function applyGrade(
   const rings = phase.screen === 'rings'
   const heroGlow = phase.screen === 'field' || phase.screen === 'rift'
   frost.setGrade(phase.screen === 'meteor' || figure ? 1 : 0)
-  frost.setExposure(phase.screen === 'field' ? 1.34 : 1)
+  // v14 faces were already bright at 1.34. A smaller lift keeps the seam highlights.
+  frost.setExposure(phase.screen === 'field' ? 1.1 : 1)
+  // The frost edge resample softens the hero, which sits in the right third. The fox does not get it.
+  frost.setEdge(phase.screen === 'field' ? 0 : 1)
   if (rings) {
     bloom.intensity = 0.62
     bloom.luminanceMaterial.threshold = 0.68
@@ -905,10 +908,11 @@ function applyGrade(
     bloom.luminanceMaterial.threshold = 0.96
     bloom.mipmapBlurPass.radius = 0.08
   } else if (heroGlow) {
-    // Threshold stays on the seams. A smaller radius keeps the brick faces from mip-blurring.
-    bloom.intensity = 0.92
-    bloom.luminanceMaterial.threshold = 0.7
-    bloom.mipmapBlurPass.radius = 0.11
+    // Fox stays sharp with almost no bloom. The hero mip radius was the scene-specific blur.
+    bloom.intensity = 0.5
+    bloom.luminanceMaterial.threshold = 0.72
+    bloom.luminanceMaterial.smoothing = 0.04
+    bloom.mipmapBlurPass.radius = 0.03
   } else {
     bloom.intensity = 0.08
     bloom.luminanceMaterial.threshold = 0.96

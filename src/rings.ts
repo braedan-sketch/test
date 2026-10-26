@@ -98,8 +98,10 @@ function dressPortal(root: Group, quality: Quality) {
       return
     }
     if (object.name === 'lattice') {
-      object.material = latticeDisc(object.material)
-      object.renderOrder = 2
+      // The disc sits at z -0.25, behind the halo plane at z 0.4. Draw it after
+      // the halo so the strokes composite over the grey centre.
+      object.material = latticeDisc()
+      object.renderOrder = 6
       object.frustumCulled = false
       return
     }
@@ -108,57 +110,59 @@ function dressPortal(root: Group, quality: Quality) {
     material.emissiveIntensity = 0.7
     material.metalness = 0
     material.envMapIntensity = 0.22
-    material.normalScale.set(0.7, 0.7)
+    material.normalScale.set(1, 1)
     material.fog = true
     material.toneMapped = true
-    object.castShadow = quality.shadows
+    // v7 is 106k tris. Skip the shadow map so the portal can stay at DPR 2.
+    object.castShadow = false
     object.receiveShadow = quality.shadows
   })
 }
 
-/** Keep the milky body thin and lift the brighter lattice strokes so the wires read. */
-function latticeDisc(source: Material | Material[]) {
-  const entry = Array.isArray(source) ? source[0] : source
-  const map =
-    entry instanceof MeshStandardMaterial ? (entry.map ?? entry.emissiveMap) : entry instanceof MeshBasicMaterial ? entry.map : null
-  if (map) {
-    map.colorSpace = SRGBColorSpace
-    map.needsUpdate = true
-  }
+/**
+ * Frost strokes in the disc's own plane. The baked map is too faint to survive
+ * on the M2, and gating the lines on that map made the centre a flat grey.
+ */
+function latticeDisc() {
   const material = new MeshBasicMaterial({
-    map: map ?? undefined,
-    color: '#e7eef4',
+    color: '#ffffff',
     transparent: true,
     opacity: 1,
     depthWrite: false,
+    depthTest: true,
     side: DoubleSide,
-    fog: true,
-    toneMapped: true,
+    fog: false,
+    toneMapped: false,
+    blending: AdditiveBlending,
   })
   material.onBeforeCompile = (shader) => {
-    shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <map_fragment>',
-      `#include <map_fragment>
-       {
-         vec2 uv = vMapUv;
-         float luma = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-         vec2 g = uv * vec2(16.0, 12.0);
-         vec2 f = abs(fract(g) - 0.5);
-         float d = min(min(f.x, f.y), min(abs(fract(g.x + g.y) - 0.5), abs(fract(g.x - g.y) - 0.5)));
-         float stroke = 1.0 - smoothstep(0.014, 0.036, d);
-         vec2 g2 = uv * vec2(7.0, 5.0) + vec2(0.17, 0.31);
-         vec2 f2 = abs(fract(g2) - 0.5);
-         float d2 = min(min(f2.x, f2.y), min(abs(fract(g2.x + g2.y) - 0.5), abs(fract(g2.x - g2.y) - 0.5)));
-         float stroke2 = 1.0 - smoothstep(0.018, 0.044, d2);
-         float line = max(stroke, stroke2 * 0.9);
-         vec3 milk = mix(vec3(0.76, 0.83, 0.9), diffuseColor.rgb, 0.22);
-         diffuseColor.rgb = mix(milk, vec3(0.98, 0.99, 1.0), line);
-         float disc = smoothstep(0.03, 0.14, max(diffuseColor.a, luma));
-         diffuseColor.a = disc * mix(0.08, 0.94, line);
-       }`,
-    )
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vLattice;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLattice = transformed;')
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vLattice;')
+      .replace(
+        '#include <opaque_fragment>',
+        `#include <opaque_fragment>
+        {
+          vec2 p = vLattice.xy;
+          float radius = length(p);
+          float disc = (1.0 - smoothstep(1.18, 1.48, radius));
+          vec2 g = p * 4.4;
+          vec2 f = abs(fract(g) - 0.5);
+          float d = min(min(f.x, f.y), min(abs(fract(g.x + g.y) - 0.5), abs(fract(g.x - g.y) - 0.5)));
+          float stroke = 1.0 - smoothstep(0.02, 0.055, d);
+          vec2 g2 = p * 2.1 + vec2(0.17, 0.09);
+          vec2 f2 = abs(fract(g2) - 0.5);
+          float d2 = min(min(f2.x, f2.y), min(abs(fract(g2.x + g2.y) - 0.5), abs(fract(g2.x - g2.y) - 0.5)));
+          float stroke2 = 1.0 - smoothstep(0.022, 0.06, d2);
+          float line = max(stroke, stroke2 * 0.8);
+          gl_FragColor.rgb = vec3(0.62, 0.78, 1.0);
+          gl_FragColor.a = disc * line * 0.85;
+        }`,
+      )
   }
-  material.customProgramCacheKey = () => 'lattice-disc-v7'
+  material.customProgramCacheKey = () => 'lattice-disc-v8'
   return material
 }
 

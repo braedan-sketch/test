@@ -24,16 +24,16 @@ import { clamp, smoother } from './math'
 import type { Quality } from './quality'
 
 const LABEL_OFFSETS: Array<[number, number]> = [
-  [-14, -12],
-  [13, -14],
-  [15, 6],
-  [-16, 8],
-  [12, 14],
-  [-13, 2],
+  [-168, -72],
+  [176, -84],
+  [184, 28],
+  [-160, 64],
+  [150, 96],
+  [-148, 6],
 ]
 
-/** v13 seams are the hot texels. Intensity near 3 lets the gaps bloom; the shader leaves the faces alone. */
-const EMISSIVE_INTENSITY = 2.85
+/** v14 preview emissive is 2.4. The seam tint is already blue; the shader only lifts the gaps. */
+const EMISSIVE_INTENSITY = 2.4
 
 export type LabelAnchor = {
   position: Vector3
@@ -117,6 +117,7 @@ export async function loadIgloo(
   })
   wireMaterial.toneMapped = false
   wireMaterial.resolution.set(window.innerWidth, window.innerHeight)
+  const grid = groundGrid()
 
   group.traverse((object) => {
     if (!(object instanceof Mesh)) return
@@ -125,11 +126,12 @@ export async function loadIgloo(
     object.frustumCulled = true
     const node = blockCarrier(object)
     const extras = readExtras(node.userData)
-    object.material = dressSnow(object.material, shared, solidUniforms, burstUniforms)
+    object.material = dressSnow(object.material, shared, solidUniforms, burstUniforms, renderer)
 
     if (seen.has(node)) return
     seen.add(node)
-    const outline = brickEdges(object.geometry)
+    const base = node.position.clone()
+    const outline = brickEdges(object.geometry, extras.row)
     wireCounts.push(outline.count)
     if (outline.hull) hulls += 1
     const wire = new LineSegments2(outline.geometry, wireMaterial)
@@ -137,7 +139,6 @@ export async function loadIgloo(
     wire.renderOrder = 3
     wire.frustumCulled = false
     object.add(wire)
-    const base = node.position.clone()
     blocks.push({
       node,
       mesh: object,
@@ -150,6 +151,7 @@ export async function loadIgloo(
       phase: extras.bidx * 0.37,
     })
   })
+  group.add(grid.lines)
 
   if (blocks.length === 0) throw new Error('igloo.glb has no blocks')
 
@@ -228,7 +230,9 @@ export async function loadIgloo(
         material.depthWrite = fade > 0.55
       }
       wireMaterial.resolution.set(window.innerWidth, window.innerHeight)
+      grid.material.resolution.set(window.innerWidth, window.innerHeight)
       wireMaterial.opacity = 1 - smoother(clamp((solid - 0.1) / 0.38, 0, 1))
+      grid.material.opacity = wireMaterial.opacity * 0.28
       const showWire = wireMaterial.opacity > 0.02
       const open = burst * (1 - smoother(dissolve))
       for (const block of blocks) {
@@ -252,7 +256,7 @@ export async function loadIgloo(
         slot.position.copy(worldPoint)
         slot.text = tags[i] ?? ''
         slot.bent = false
-        slot.constellation = true
+        slot.constellation = false
         slot.offsetX = LABEL_OFFSETS[i]?.[0] ?? 12
         slot.offsetY = LABEL_OFFSETS[i]?.[1] ?? -10
       }
@@ -281,17 +285,24 @@ function dressSnow(
   shared: Map<string, MeshStandardMaterial>,
   solidUniforms: Array<{ value: number }>,
   burstUniforms: Array<{ value: number }>,
+  renderer: WebGLRenderer,
 ) {
   const source = Array.isArray(material) ? material[0] : material
   if (!(source instanceof MeshStandardMaterial)) return material
   const existing = shared.get('snow')
   if (existing) return existing
   const entry = source.clone()
-  // v13 block tones, a little under the baked white so the gaps can be the brightest thing.
-  entry.color.multiplyScalar(0.85)
+  // v14 is already murky. A small scale pulls face luma toward the darker ice without killing the veins.
+  entry.color.multiplyScalar(0.78)
   entry.emissive.setRGB(1, 1, 1)
   entry.emissiveIntensity = EMISSIVE_INTENSITY
-  entry.normalScale.set(0.62, 0.62)
+  entry.normalScale.set(0.85, 0.85)
+  const anisotropy = renderer.capabilities.getMaxAnisotropy()
+  for (const map of [entry.map, entry.normalMap, entry.roughnessMap, entry.aoMap, entry.emissiveMap, entry.metalnessMap]) {
+    if (!map) continue
+    map.anisotropy = anisotropy
+    map.needsUpdate = true
+  }
   entry.metalness = 0
   entry.envMapIntensity = 0.08
   entry.toneMapped = true
@@ -319,16 +330,25 @@ function dressSnow(
       .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
+        #ifdef USE_EMISSIVEMAP
+          vec2 seamDx = dFdx(vEmissiveMapUv) * 2.4;
+          vec2 seamDy = dFdy(vEmissiveMapUv) * 2.4;
+          vec3 seamWide = emissive * texture2D(emissiveMap, vEmissiveMapUv + seamDx).rgb;
+          seamWide = max(seamWide, emissive * texture2D(emissiveMap, vEmissiveMapUv - seamDx).rgb);
+          seamWide = max(seamWide, emissive * texture2D(emissiveMap, vEmissiveMapUv + seamDy).rgb);
+          seamWide = max(seamWide, emissive * texture2D(emissiveMap, vEmissiveMapUv - seamDy).rgb);
+          totalEmissiveRadiance = max(totalEmissiveRadiance, seamWide);
+        #endif
         float seam = max(totalEmissiveRadiance.r, max(totalEmissiveRadiance.g, totalEmissiveRadiance.b));
-        float gap = smoothstep(0.85, 1.55, seam);
-        totalEmissiveRadiance *= mix(0.82, 1.7, gap);
-        float hot = smoothstep(3.05, 4.3, seam * mix(0.82, 1.7, gap));
-        totalEmissiveRadiance *= mix(1.0, 0.74, hot);
+        float gap = smoothstep(0.55, 1.2, seam);
+        totalEmissiveRadiance *= mix(0.7, 1.65, gap);
+        float hot = smoothstep(2.7, 3.8, seam * mix(0.7, 1.65, gap));
+        totalEmissiveRadiance *= mix(1.0, 0.8, hot);
         totalEmissiveRadiance *= 1.0 - smoothstep(0.0, 0.28, uBurst);
         totalEmissiveRadiance *= smoothstep(0.15, 0.7, uSolid);`,
       )
   }
-  entry.customProgramCacheKey = () => `${priorKey()}-igloo-v14`
+  entry.customProgramCacheKey = () => `${priorKey()}-igloo-v15`
   solidUniforms.push(uniforms.uSolid)
   burstUniforms.push(uniforms.uBurst)
   shared.set('snow', entry)
@@ -342,7 +362,8 @@ type OutlineEdge = { ax: number; ay: number; az: number; bx: number; by: number;
  * A few spread vertices make a block, not the cracked surface.
  * EdgesGeometry at 40° then drops the short fragments.
  */
-function brickEdges(geometry: BufferGeometry) {
+function brickEdges(geometry: BufferGeometry, row: number) {
+  const crown = row >= 3
   const hull = convexProxy(geometry)
   const source = hull ?? geometry
   let edges = collectEdges(source, hull ? 40 : 62, 0.05)
@@ -350,7 +371,9 @@ function brickEdges(geometry: BufferGeometry) {
     const tighter = collectEdges(source, edges.length > 22 ? 58 : 26, 0.04)
     if (tighter.length >= 8 && tighter.length <= 22) edges = tighter
   }
-  if (edges.length > 20) edges = edges.slice(0, 20)
+  const cap = crown ? (row >= 4 ? 8 : 12) : 20
+  if (edges.length > cap) edges = edges.slice(0, cap)
+  if (crown) shrinkEdges(edges, row >= 4 ? 0.8 : 0.9)
   hull?.dispose()
   const data = new Float32Array(Math.max(1, edges.length) * 6)
   for (let i = 0; i < edges.length; i += 1) {
@@ -366,6 +389,61 @@ function brickEdges(geometry: BufferGeometry) {
   const lines = new LineSegmentsGeometry()
   lines.setPositions(data)
   return { geometry: lines, count: edges.length, hull: hull != null }
+}
+
+function shrinkEdges(edges: OutlineEdge[], scale: number) {
+  if (edges.length === 0) return
+  let cx = 0
+  let cy = 0
+  let cz = 0
+  for (const edge of edges) {
+    cx += edge.ax + edge.bx
+    cy += edge.ay + edge.by
+    cz += edge.az + edge.bz
+  }
+  const count = edges.length * 2
+  cx /= count
+  cy /= count
+  cz /= count
+  for (const edge of edges) {
+    edge.ax = cx + (edge.ax - cx) * scale
+    edge.ay = cy + (edge.ay - cy) * scale
+    edge.az = cz + (edge.az - cz) * scale
+    edge.bx = cx + (edge.bx - cx) * scale
+    edge.by = cy + (edge.by - cy) * scale
+    edge.bz = cz + (edge.bz - cz) * scale
+  }
+}
+
+/** Faint plan grid under the dome, the same idea as the build 23 ground guides. */
+function groundGrid() {
+  const positions: number[] = []
+  const y = 0.035
+  const extent = 6
+  const step = 0.75
+  for (let i = -extent; i <= extent + 1e-4; i += step) {
+    positions.push(-extent, y, i, extent, y, i)
+    positions.push(i, y, -extent, i, y, extent)
+  }
+  const geometry = new LineSegmentsGeometry()
+  geometry.setPositions(new Float32Array(positions))
+  const material = new LineMaterial({
+    color: '#d7e2ea',
+    linewidth: 1,
+    worldUnits: false,
+    transparent: true,
+    opacity: 0.22,
+    depthWrite: false,
+    depthTest: true,
+    fog: false,
+  })
+  material.toneMapped = false
+  material.resolution.set(window.innerWidth, window.innerHeight)
+  const lines = new LineSegments2(geometry, material)
+  lines.name = 'ground-grid'
+  lines.renderOrder = 1
+  lines.frustumCulled = false
+  return { lines, material }
 }
 
 function convexProxy(geometry: BufferGeometry) {

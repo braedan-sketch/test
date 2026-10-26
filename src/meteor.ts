@@ -98,14 +98,14 @@ function dressCrystal(mesh: Mesh, envMap: Texture, low: boolean) {
     // Opaque figure card so the transmission pass can refract it. Haze below the cutoff is discarded.
     source.transparent = false
     source.opacity = 1
-    source.alphaTest = 0.18
+    source.alphaTest = 0.12
     source.depthWrite = true
     source.depthTest = true
     source.side = DoubleSide
     source.fog = false
     source.metalness = 0
     source.roughness = 0.85
-    source.emissiveIntensity = 0.42
+    source.emissiveIntensity = 0.35
     source.color.set('#e4eaee')
     source.emissive.set('#d5dee6')
     muteSmoke(source)
@@ -117,12 +117,14 @@ function dressCrystal(mesh: Mesh, envMap: Texture, low: boolean) {
   source.transmission = 1
   source.ior = 1.45
   source.thickness = shellThickness(mesh, source.thickness)
-  source.attenuationColor.setRGB(0.82, 0.89, 0.97, LinearSRGBColorSpace)
-  source.attenuationDistance = 2
-  source.color.set('#f4f7f8')
-  source.roughness = 0.9
+  // v6 publishes a cool attenuation at 1 m. A light cool base keeps that from going black.
+  source.attenuationColor.setRGB(0.55, 0.64, 0.8, LinearSRGBColorSpace)
+  source.attenuationDistance = 0.95
+  source.color.set('#c5d4e2')
+  source.roughness = 0.4
   source.metalness = 0
-  source.normalScale.set(1.55, 1.55)
+  source.normalScale.set(1.05, 1.05)
+  tameGlint(source)
   source.iridescence = 0
   source.dispersion = 0
   source.clearcoat = 0
@@ -158,10 +160,10 @@ function muteSmoke(source: MeshStandardMaterial) {
           vec2 smokeDx = dFdx(vMapUv);
           vec2 smokeDy = dFdy(vMapUv);
           vec4 smokeTex = texture2D(map, vMapUv);
-          smokeTex += texture2D(map, vMapUv + smokeDx * 2.2);
-          smokeTex += texture2D(map, vMapUv - smokeDx * 2.2);
-          smokeTex += texture2D(map, vMapUv + smokeDy * 2.2);
-          smokeTex += texture2D(map, vMapUv - smokeDy * 2.2);
+          smokeTex += texture2D(map, vMapUv + smokeDx * 1.15);
+          smokeTex += texture2D(map, vMapUv - smokeDx * 1.15);
+          smokeTex += texture2D(map, vMapUv + smokeDy * 1.15);
+          smokeTex += texture2D(map, vMapUv - smokeDy * 1.15);
           smokeTex /= 5.0;
           #ifdef DECODE_VIDEO_TEXTURE
             smokeTex = sRGBTransferEOTF(smokeTex);
@@ -173,14 +175,64 @@ function muteSmoke(source: MeshStandardMaterial) {
         '#include <opaque_fragment>',
         `#include <opaque_fragment>
         {
-          vec3 glass = vec3(0.64, 0.70, 0.76);
-          vec3 smoked = mix(glass, gl_FragColor.rgb, 0.42);
-          float y = dot(smoked, vec3(0.2126, 0.7152, 0.0722));
-          gl_FragColor.rgb = mix(smoked, vec3(y * 0.94, y, y * 1.05), 0.45);
+          vec3 glass = vec3(0.50, 0.56, 0.64);
+          vec3 figure = gl_FragColor.rgb;
+          float y = dot(figure, vec3(0.2126, 0.7152, 0.0722));
+          figure = mix(vec3(0.16, 0.19, 0.24), figure, smoothstep(0.02, 0.55, y));
+          gl_FragColor.rgb = mix(glass, figure, 0.70);
         }`,
       )
   }
-  source.customProgramCacheKey = () => `${priorKey()}-crystal-smoke-v6`
+  source.customProgramCacheKey = () => `${priorKey()}-crystal-smoke-v7`
+}
+
+/** The top-centre notch and the vertical streak are shell geometry. Dull the specular there. */
+function tameGlint(source: MeshStandardMaterial) {
+  const prior = source.onBeforeCompile
+  const priorKey = source.customProgramCacheKey.bind(source)
+  source.onBeforeCompile = (shader, renderer) => {
+    prior.call(source, shader, renderer)
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vShell;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvShell = transformed;')
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vShell;')
+      .replace(
+        '#include <roughnessmap_fragment>',
+        `#include <roughnessmap_fragment>
+        {
+          float top = smoothstep(0.32, 0.62, vShell.y);
+          float axle = 1.0 - smoothstep(0.03, 0.2, length(vShell.xz));
+          float streak = smoothstep(0.18, 0.5, vShell.y) * (1.0 - smoothstep(0.035, 0.14, abs(vShell.x)));
+          float glint = max(top * axle, streak);
+          roughnessFactor = mix(roughnessFactor, 0.92, glint);
+        }`,
+      )
+      .replace(
+        '#include <opaque_fragment>',
+        `#include <opaque_fragment>
+        {
+          float top = smoothstep(0.32, 0.62, vShell.y);
+          float axle = 1.0 - smoothstep(0.03, 0.2, length(vShell.xz));
+          float streak = smoothstep(0.18, 0.5, vShell.y) * (1.0 - smoothstep(0.035, 0.14, abs(vShell.x)));
+          float glint = max(top * axle, streak);
+          gl_FragColor.rgb *= mix(1.0, 0.58, glint);
+        }`,
+      )
+      .replace(
+        '#include <lights_fragment_end>',
+        `#include <lights_fragment_end>
+        {
+          float top = smoothstep(0.32, 0.62, vShell.y);
+          float axle = 1.0 - smoothstep(0.03, 0.2, length(vShell.xz));
+          float streak = smoothstep(0.18, 0.5, vShell.y) * (1.0 - smoothstep(0.035, 0.14, abs(vShell.x)));
+          float glint = max(top * axle, streak);
+          reflectedLight.directSpecular *= mix(1.0, 0.08, glint);
+          reflectedLight.indirectSpecular *= mix(1.0, 0.16, glint);
+        }`,
+      )
+  }
+  source.customProgramCacheKey = () => `${priorKey()}-crystal-glint-v6`
 }
 
 /** v5 publishes thickness on the shell. Fall back to the measured 1.4996 m. */
@@ -190,7 +242,7 @@ function shellThickness(mesh: Mesh, loaded: number) {
   const published = Number.isFinite(own) && own > 0.2 ? own : parent
   if (Number.isFinite(published) && published > 0.2) return published
   if (loaded > 0.2) return loaded
-  return 1.4996
+  return 1.4754
 }
 
 function studioRoom(renderer: WebGLRenderer) {

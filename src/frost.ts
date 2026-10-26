@@ -9,12 +9,13 @@ import { Uniform } from 'three'
 const fragment = /* glsl */ `
 uniform float uGrade;
 uniform float uExposure;
+uniform float uEdge;
 
 void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
   vec2 p = uv * 2.0 - 1.0;
   float r = length(p);
   float edge = smoothstep(0.42, 1.05, r);
-  vec2 offset = p * edge * 0.008;
+  vec2 offset = p * edge * 0.008 * uEdge;
   vec3 color = texture2D(inputBuffer, uv + offset).rgb;
   color *= uExposure;
   vec3 cool = color * vec3(0.86, 0.92, 0.98) + vec3(0.05, 0.07, 0.09);
@@ -35,6 +36,7 @@ export class FrostEffect extends Effect {
       uniforms: new Map<string, Uniform>([
         ['uGrade', new Uniform(0)],
         ['uExposure', new Uniform(1)],
+        ['uEdge', new Uniform(1)],
       ]),
     })
   }
@@ -46,6 +48,11 @@ export class FrostEffect extends Effect {
 
   setExposure(amount: number) {
     const slot = this.uniforms.get('uExposure')
+    if (slot) slot.value = amount
+  }
+
+  setEdge(amount: number) {
+    const slot = this.uniforms.get('uEdge')
     if (slot) slot.value = amount
   }
 }

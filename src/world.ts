@@ -171,11 +171,16 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
          float spikeR = length(spikeWorld.xz);
          float spikeBand = smoothstep(18.0, 26.0, spikeR) * (1.0 - smoothstep(48.0, 72.0, spikeR));
          float mound = -0.2 - smoothstep(18.0, 42.0, spikeR) * 0.5;
-         transformed.y = mix(transformed.y, min(transformed.y, mound), spikeBand);`,
+         transformed.y = mix(transformed.y, min(transformed.y, mound), spikeBand);
+         // The hero camera sits on +Z. Knock down a rock that sticks above the slope into the bottom of that frame.
+         float slope = -0.1 - smoothstep(2.4, 8.0, spikeR) * 3.4;
+         float front = smoothstep(1.6, 4.5, spikeWorld.z);
+         float extra = smoothstep(0.7, 1.35, spikeWorld.y - slope);
+         transformed.y = mix(transformed.y, min(transformed.y, slope + 0.45), front * extra);`,
       )
     }
   }
-  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v11`
+  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v12`
 }
 
 function buildSky() {
@@ -272,5 +277,8 @@ function buildSnow(count: number) {
 }
 
 function fogDensity(mood: number) {
-  return mood > 1.2 ? 0.0022 : 0.00145
+  // The field (mood 0) matches the v11 preview: exponential fog 0.016 so the background goes soft.
+  if (mood < 0.15) return 0.016
+  if (mood > 1.2) return 0.0022
+  return 0.0035
 }
