@@ -134,9 +134,8 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
   if (Array.isArray(entry) || !(entry instanceof MeshStandardMaterial)) return
   entry.fog = true
   if (kind === 'terrain') {
-    // v7 snow is already pale. A light grade keeps shadow in the mound.
-    // Roughness maps and metal flakes are what glitter on the near pad.
-    entry.color.multiplyScalar(0.5)
+    // Pale snow was holding the hero floor near 66. Push the mound darker.
+    entry.color.multiplyScalar(0.4)
     entry.roughness = 1
     entry.metalness = 0
     entry.roughnessMap = null
@@ -146,8 +145,8 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
   }
   const prior = entry.onBeforeCompile
   const priorKey = entry.customProgramCacheKey.bind(entry)
-  const curve = kind === 'terrain' ? '1.36' : '1.08'
-  const gain = kind === 'terrain' ? '0.88' : '1.0'
+  const curve = kind === 'terrain' ? '1.52' : '1.08'
+  const gain = kind === 'terrain' ? '0.84' : '1.0'
   entry.onBeforeCompile = (shader, renderer) => {
     prior.call(entry, shader, renderer)
     shader.fragmentShader = shader.fragmentShader
@@ -165,20 +164,20 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
           : '#include <lights_fragment_end>',
       )
     if (kind === 'terrain') {
-      // The repeated spike band sits in the 14–20 m ring of terrain.glb.
-      // Drop those vertices onto the mound and leave the pad and the ranges.
+      // Mid-distance spikes sit past the first ring. Flatten them into the mound
+      // and leave the pad under the igloo and the far ranges.
       shader.vertexShader = shader.vertexShader.replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
          vec4 spikeWorld = modelMatrix * vec4(transformed, 1.0);
          float spikeR = length(spikeWorld.xz);
-         float spikeBand = smoothstep(7.0, 11.0, spikeR) * (1.0 - smoothstep(20.0, 30.0, spikeR));
-         float mound = 0.02 - smoothstep(4.0, 24.0, spikeR) * 0.45;
+         float spikeBand = smoothstep(8.0, 13.0, spikeR) * (1.0 - smoothstep(58.0, 82.0, spikeR));
+         float mound = 0.12 - smoothstep(6.0, 42.0, spikeR) * 0.72;
          transformed.y = mix(transformed.y, min(transformed.y, mound), spikeBand);`,
       )
     }
   }
-  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v8`
+  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v9`
 }
 
 function buildSky() {

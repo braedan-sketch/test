@@ -1,15 +1,12 @@
 import {
   AdditiveBlending,
-  CircleGeometry,
   type Blending,
   Color,
   DoubleSide,
   Group,
   Mesh,
   MeshBasicMaterial,
-  MeshPhysicalMaterial,
   MeshStandardMaterial,
-  NormalBlending,
   PointLight,
   SRGBColorSpace,
   Vector3,
@@ -91,20 +88,19 @@ function collectPieces(root: Group) {
 }
 
 function dressPortal(root: Group, quality: Quality) {
+  const haloHolder: Mesh[] = []
   root.traverse((object) => {
     if (!(object instanceof Mesh)) return
     if (object.name === 'halo') {
-      object.material = fxMaterial(object.material, 5.2, new Color(1, 1, 1), AdditiveBlending, false)
+      object.material = fxMaterial(object.material, 5.2, new Color(0.9, 0.94, 0.98), AdditiveBlending, false)
       object.renderOrder = 5
       object.frustumCulled = false
+      haloHolder.push(object)
       return
     }
     if (object.name === 'lattice') {
-      // Soft and faint. The frosted disc in front of it is what should read.
-      object.material = fxMaterial(object.material, 1, new Color(0.62, 0.68, 0.74), NormalBlending, true)
-      const mat = object.material
-      if (mat instanceof MeshBasicMaterial) mat.opacity = 0.18
-      object.renderOrder = 1
+      object.material = latticeDisc(object.material)
+      object.renderOrder = 2
       object.frustumCulled = false
       return
     }
@@ -117,46 +113,50 @@ function dressPortal(root: Group, quality: Quality) {
     material.toneMapped = true
     object.castShadow = quality.shadows
     object.receiveShadow = quality.shadows
+    const group = (object.userData as { group?: unknown }).group
+    const parentGroup = (object.parent?.userData as { group?: unknown } | undefined)?.group
+    if (group === 'ring_inner' || parentGroup === 'ring_inner') object.scale.multiplyScalar(1.32)
   })
-  root.add(frostDisc(quality.low))
+  const haloMesh = haloHolder[0]
+  if (haloMesh) {
+    const soft = haloMesh.clone()
+    soft.name = 'halo-soft'
+    soft.material = fxMaterial(haloMesh.material, 2.2, new Color(0.72, 0.82, 0.94), AdditiveBlending, false)
+    soft.scale.multiplyScalar(1.42)
+    soft.renderOrder = 4
+    haloMesh.parent?.add(soft)
+  }
 }
 
-function frostDisc(low: boolean) {
-  const disc = new Mesh(
-    new CircleGeometry(1.38, 72),
-    low
-      ? new MeshStandardMaterial({
-          color: '#d5e2ee',
-          roughness: 0.78,
-          metalness: 0,
-          transparent: true,
-          opacity: 0.42,
-          depthWrite: false,
-          side: DoubleSide,
-          fog: true,
-        })
-      : new MeshPhysicalMaterial({
-          color: '#d5dee6',
-          roughness: 0.72,
-          metalness: 0,
-          transmission: 1,
-          thickness: 0.16,
-          ior: 1.45,
-          attenuationColor: new Color('#d7e4f0'),
-          attenuationDistance: 0.9,
-          transparent: true,
-          opacity: 0.92,
-          depthWrite: false,
-          side: DoubleSide,
-          fog: true,
-          envMapIntensity: 0.16,
-        }),
-  )
-  disc.name = 'frost-disc'
-  disc.position.z = -0.12
-  disc.renderOrder = 2
-  disc.frustumCulled = false
-  return disc
+/** v4's lattice is the frosted disc. Keep a floor on the alpha so the disc reads, not just the lines. */
+function latticeDisc(source: Material | Material[]) {
+  const entry = Array.isArray(source) ? source[0] : source
+  const map =
+    entry instanceof MeshStandardMaterial ? (entry.map ?? entry.emissiveMap) : entry instanceof MeshBasicMaterial ? entry.map : null
+  if (map) {
+    map.colorSpace = SRGBColorSpace
+    map.needsUpdate = true
+  }
+  const material = new MeshStandardMaterial({
+    map: map ?? undefined,
+    color: '#d7e4f0',
+    roughness: 0.42,
+    metalness: 0,
+    transparent: true,
+    opacity: 1,
+    depthWrite: false,
+    side: DoubleSide,
+    fog: true,
+  })
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <map_fragment>',
+      `#include <map_fragment>
+       diffuseColor.a = max(diffuseColor.a, 0.64);`,
+    )
+  }
+  material.customProgramCacheKey = () => 'lattice-disc-v4'
+  return material
 }
 
 function fxMaterial(

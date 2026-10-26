@@ -22,7 +22,7 @@ function emitHeroProgress() {
     loaded += slot.loaded
     total += slot.total
   }
-  const bytes = total > 0 ? loaded / total : 0
+  const bytes = total > 0 ? Math.min(1, loaded / total) : 0
   const items = heroItemsTotal > 0 ? heroItemsLoaded / heroItemsTotal : 0
   const value = Math.max(bytes, items)
   heroProgressHigh = Math.max(heroProgressHigh, value)
@@ -89,12 +89,22 @@ export async function loadHero(
   if (renderer) loader.setKTX2Loader(ktx2Loader(renderer))
   heroBytes.set(url, { loaded: 0, total: 0 })
   try {
-    const gltf = await loader.loadAsync(url, (event) => {
-      const total = event.total > 0 ? event.total : (heroBytes.get(url)?.total ?? 0)
-      heroBytes.set(url, { loaded: event.loaded, total })
+    const buffer = await readWithProgress(url, (loaded, total) => {
+      const slot = heroBytes.get(url) ?? { loaded: 0, total: 0 }
+      slot.loaded = loaded
+      if (total > 0) slot.total = total
+      heroBytes.set(url, slot)
       emitHeroProgress()
-      if (options?.onProgress && total > 0) options.onProgress(event.loaded / total)
+      if (options?.onProgress && slot.total > 0) options.onProgress(slot.loaded / slot.total)
     })
+    const base = url.slice(0, url.lastIndexOf('/') + 1)
+    const gltf = await loader.parseAsync(buffer, base)
+    const slot = heroBytes.get(url)
+    if (slot && slot.total <= 0) {
+      slot.total = slot.loaded
+      heroBytes.set(url, slot)
+      emitHeroProgress()
+    }
     const scene = gltf.scene
     scene.name = url
     return scene
@@ -104,6 +114,44 @@ export async function loadHero(
   } finally {
     draco.dispose()
   }
+}
+
+/** Stream the file so the loader sees bytes as they arrive, including embedded KTX2. */
+async function readWithProgress(url: string, onBytes: (loaded: number, total: number) => void) {
+  let total = 0
+  try {
+    const head = await fetch(url, { method: 'HEAD' })
+    total = Number(head.headers.get('content-length')) || 0
+  } catch {
+    total = 0
+  }
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`Failed to fetch ${url}`)
+  if (total <= 0) total = Number(response.headers.get('content-length')) || 0
+  const reader = response.body?.getReader()
+  if (!reader) {
+    const buffer = await response.arrayBuffer()
+    onBytes(buffer.byteLength, buffer.byteLength)
+    return buffer
+  }
+  const chunks: Uint8Array[] = []
+  let loaded = 0
+  for (;;) {
+    const step = await reader.read()
+    if (step.done) break
+    if (!step.value) continue
+    chunks.push(step.value)
+    loaded += step.value.byteLength
+    onBytes(loaded, total)
+  }
+  const buffer = new Uint8Array(loaded)
+  let offset = 0
+  for (const chunk of chunks) {
+    buffer.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  onBytes(loaded, total > 0 ? total : loaded)
+  return buffer.buffer
 }
 
 /**

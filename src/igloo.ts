@@ -26,8 +26,8 @@ const LABEL_OFFSETS: Array<[number, number]> = [
   [-13, 2],
 ]
 
-/** v10 bakes near-white seam light. This only sets its strength. */
-const EMISSIVE_INTENSITY = 2.8
+/** v11 bakes the seam light. Faces are darkened in the shader, not here. */
+const EMISSIVE_INTENSITY = 3.4
 
 export type LabelAnchor = {
   position: Vector3
@@ -153,7 +153,7 @@ export async function loadIgloo(
       for (const slot of solidUniforms) slot.value = solid
       group.visible = dissolve < 0.985
       const present = smoother(clamp(solid * 1.15, 0, 1)) * (1 - smoother(dissolve))
-      gapLight.intensity = present * 3.4
+      gapLight.intensity = present * 2.4
       // Stops 00–01 stay wire. The solid writes nothing and casts nothing, so it
       // cannot leave a black disc in the snow under the dome.
       const fade = smoother(clamp((solid - 0.04) / 0.26, 0, 1))
@@ -223,9 +223,10 @@ function dressSnow(
   const existing = shared.get('snow')
   if (existing) return existing
   const entry = source.clone()
-  // v10 faces are already pale. Darken them so the seam glow reads like igloo's.
-  entry.color.multiplyScalar(0.85)
-  entry.emissive.setRGB(0.94, 0.97, 1)
+  // The v10 multiply of 0.85 still left the faces brighter than the seams.
+  // Diffuse is scaled down in the shader. Emissive is left for the gaps.
+  entry.color.multiplyScalar(0.62)
+  entry.emissive.setRGB(1, 1, 1)
   entry.emissiveIntensity = EMISSIVE_INTENSITY
   entry.metalness = 0
   entry.envMapIntensity = 0.08
@@ -250,35 +251,103 @@ function dressSnow(
         uniform float uSolid;`,
       )
       .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        diffuseColor.rgb *= 0.62;`,
+      )
+      .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
+        float seam = max(totalEmissiveRadiance.r, max(totalEmissiveRadiance.g, totalEmissiveRadiance.b));
+        totalEmissiveRadiance *= mix(0.2, 2.6, smoothstep(0.18, 0.62, seam));
         totalEmissiveRadiance *= smoothstep(0.15, 0.7, uSolid);`,
       )
   }
-  entry.customProgramCacheKey = () => `${priorKey()}-igloo-v10`
+  entry.customProgramCacheKey = () => `${priorKey()}-igloo-v11`
   solidUniforms.push(uniforms.uSolid)
   shared.set('snow', entry)
   return entry
 }
 
-/** Twelve edges of the block's local box. The sculpt triangulation stays out of the wire. */
+/**
+ * Twelve edges of the brick's own oriented box. Node rotation is identity;
+ * the dome orientation is in the vertices, so a world-axis box reads as scaffolding.
+ */
 function slabEdges(geometry: BufferGeometry) {
-  geometry.computeBoundingBox()
-  const box = geometry.boundingBox
+  const attr = geometry.getAttribute('position')
   const geo = new BufferGeometry()
-  if (!box) return geo
-  const { min, max } = box
-  const corners = [
-    [min.x, min.y, min.z],
-    [max.x, min.y, min.z],
-    [max.x, min.y, max.z],
-    [min.x, min.y, max.z],
-    [min.x, max.y, min.z],
-    [max.x, max.y, min.z],
-    [max.x, max.y, max.z],
-    [min.x, max.y, max.z],
-  ]
-  const pairs = [0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7]
+  if (!attr || attr.count < 8) return geo
+  const count = attr.count
+  const step = Math.max(1, Math.floor(count / 480))
+  let sx = 0
+  let sy = 0
+  let sz = 0
+  let n = 0
+  for (let i = 0; i < count; i += step) {
+    sx += attr.getX(i)
+    sy += attr.getY(i)
+    sz += attr.getZ(i)
+    n += 1
+  }
+  const mx = sx / n
+  const my = sy / n
+  const mz = sz / n
+  let cxx = 0
+  let cyy = 0
+  let czz = 0
+  let cxy = 0
+  let cxz = 0
+  let cyz = 0
+  for (let i = 0; i < count; i += step) {
+    const x = attr.getX(i) - mx
+    const y = attr.getY(i) - my
+    const z = attr.getZ(i) - mz
+    cxx += x * x
+    cyy += y * y
+    czz += z * z
+    cxy += x * y
+    cxz += x * z
+    cyz += y * z
+  }
+  const axes = jacobiAxes([
+    [cxx, cxy, cxz],
+    [cxy, cyy, cyz],
+    [cxz, cyz, czz],
+  ])
+  const min = [Infinity, Infinity, Infinity]
+  const max = [-Infinity, -Infinity, -Infinity]
+  for (let i = 0; i < count; i += step) {
+    const x = attr.getX(i) - mx
+    const y = attr.getY(i) - my
+    const z = attr.getZ(i) - mz
+    for (let axis = 0; axis < 3; axis += 1) {
+      const basis = axes[axis]
+      if (!basis) continue
+      const projected = x * basis[0] + y * basis[1] + z * basis[2]
+      if (projected < min[axis]) min[axis] = projected
+      if (projected > max[axis]) max[axis] = projected
+    }
+  }
+  const corners: number[][] = []
+  for (let ix = 0; ix < 2; ix += 1) {
+    for (let iy = 0; iy < 2; iy += 1) {
+      for (let iz = 0; iz < 2; iz += 1) {
+        const px = ix ? max[0] : min[0]
+        const py = iy ? max[1] : min[1]
+        const pz = iz ? max[2] : min[2]
+        const ax = axes[0]
+        const ay = axes[1]
+        const az = axes[2]
+        if (!ax || !ay || !az) continue
+        corners.push([
+          mx + ax[0] * px + ay[0] * py + az[0] * pz,
+          my + ax[1] * px + ay[1] * py + az[1] * pz,
+          mz + ax[2] * px + ay[2] * py + az[2] * pz,
+        ])
+      }
+    }
+  }
+  const pairs = [0, 1, 2, 3, 4, 5, 6, 7, 0, 2, 1, 3, 4, 6, 5, 7, 0, 4, 1, 5, 2, 6, 3, 7]
   const positions: number[] = []
   for (let i = 0; i < pairs.length; i += 2) {
     const a = corners[pairs[i] ?? 0]
@@ -288,6 +357,60 @@ function slabEdges(geometry: BufferGeometry) {
   }
   geo.setAttribute('position', new Float32BufferAttribute(positions, 3))
   return geo
+}
+
+/** Eigenvectors of a symmetric 3×3, one axis per row. */
+function jacobiAxes(matrix: number[][]) {
+  const a = matrix.map((row) => [...row])
+  const v = [
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+  ]
+  for (let sweep = 0; sweep < 14; sweep += 1) {
+    for (let p = 0; p < 3; p += 1) {
+      for (let q = p + 1; q < 3; q += 1) {
+        const apq = a[p]?.[q] ?? 0
+        if (Math.abs(apq) < 1e-12) continue
+        const app = a[p]?.[p] ?? 0
+        const aqq = a[q]?.[q] ?? 0
+        const tau = (aqq - app) / (2 * apq)
+        const sign = tau >= 0 ? 1 : -1
+        const t = sign / (Math.abs(tau) + Math.sqrt(1 + tau * tau))
+        const c = 1 / Math.sqrt(1 + t * t)
+        const s = t * c
+        if (a[p]) a[p][p] = c * c * app - 2 * s * c * apq + s * s * aqq
+        if (a[q]) a[q][q] = s * s * app + 2 * s * c * apq + c * c * aqq
+        if (a[p]) a[p][q] = 0
+        if (a[q]) a[q][p] = 0
+        for (let k = 0; k < 3; k += 1) {
+          if (k === p || k === q) continue
+          const akp = a[k]?.[p] ?? 0
+          const akq = a[k]?.[q] ?? 0
+          const rowP = c * akp - s * akq
+          const rowQ = s * akp + c * akq
+          if (a[k]) {
+            a[k][p] = rowP
+            a[k][q] = rowQ
+          }
+          if (a[p]) a[p][k] = rowP
+          if (a[q]) a[q][k] = rowQ
+        }
+        for (let k = 0; k < 3; k += 1) {
+          const vip = v[k]?.[p] ?? 0
+          const viq = v[k]?.[q] ?? 0
+          if (!v[k]) continue
+          v[k][p] = c * vip - s * viq
+          v[k][q] = s * vip + c * viq
+        }
+      }
+    }
+  }
+  return [0, 1, 2].map((axis) => {
+    const dir = [v[0]?.[axis] ?? 0, v[1]?.[axis] ?? 0, v[2]?.[axis] ?? 0]
+    const len = Math.hypot(dir[0] ?? 0, dir[1] ?? 0, dir[2] ?? 0) || 1
+    return dir.map((value) => (value ?? 0) / len)
+  })
 }
 
 function blockCarrier(mesh: Mesh) {

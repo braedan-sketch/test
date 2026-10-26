@@ -63,8 +63,8 @@ declare global {
   }
 }
 
-// v10 dome top is 2.35. Aim a little higher than the v9 seat.
-const EYE_TARGET: readonly [number, number, number] = [0.08, 1.18, 0.02]
+// v11 dome top is 2.26.
+const EYE_TARGET: readonly [number, number, number] = [0.08, 1.12, 0.02]
 const EYE_DIR: readonly [number, number, number] = [0.42, 0.18, 1.55]
 const CRYSTAL_DIR: readonly [number, number, number] = [0.22, 0.04, 1]
 // Upright bust, base on the ring at y 0, ears near y 2. Look slightly up at the chest.
@@ -96,7 +96,7 @@ export async function startExperience(overlay: Overlay) {
   renderer.outputColorSpace = SRGBColorSpace
   renderer.toneMapping = NoToneMapping
   renderer.toneMappingExposure = 0.96
-  renderer.transmissionResolutionScale = quality.low ? 0.25 : 0.5
+  renderer.transmissionResolutionScale = quality.low ? 0.35 : 1
   renderer.setClearColor('#c5c8cc', 1)
   if (quality.shadows) {
     renderer.shadowMap.enabled = true
@@ -109,8 +109,15 @@ export async function startExperience(overlay: Overlay) {
   // transmission pre-pass and is drawn with the transparent objects.
   camera.layers.enable(1)
   let targetProgress = 0
+  let shown = 0
   bindHeroProgress((value) => {
-    targetProgress = Math.max(targetProgress, value * 0.92)
+    const next = Math.min(0.92, value)
+    targetProgress = Math.max(targetProgress, next)
+    // Paint during the download. The frame loop starts only after the other heroes parse.
+    if (targetProgress > shown) {
+      shown = targetProgress
+      overlay.setProgress(shown)
+    }
   })
   const iglooPromise = loadIgloo(quality, renderer, () => {})
   const world = createWorld(scene, quality, renderer)
@@ -139,9 +146,10 @@ export async function startExperience(overlay: Overlay) {
   const softGpu = softwareGpu(renderer)
   const dof = new DepthOfFieldEffect(camera, {
     focusDistance: 8,
-    focusRange: 7.5,
-    bokehScale: quality.low ? 0.18 : softGpu ? 0.32 : 0.48,
-    resolutionScale: quality.low || softGpu ? 0.25 : 0.75,
+    focusRange: 14,
+    // The half-resolution bokeh was the hero sharpness drop. The field stays sharp.
+    bokehScale: 0,
+    resolutionScale: 1,
   })
   const warp = new WarpEffect()
   const noise = new NoiseEffect({
@@ -254,7 +262,7 @@ export async function startExperience(overlay: Overlay) {
 
   const pos = new Vector3()
   const target = new Vector3()
-  const focusPoint = new Vector3(0.08, 1.18, 0)
+  const focusPoint = new Vector3(0.08, 1.12, 0)
   // Field focus stays on the dome. Other scenes follow the look target.
   dof.target = focusPoint
   if (window.__blendy) {
@@ -285,7 +293,6 @@ export async function startExperience(overlay: Overlay) {
   let igloo: Igloo | null = null
   let slots: LabelAnchor[] = []
   const meteorSlots: LabelAnchor[] = makeLabelSlots(meteor.labelCount)
-  let shown = 0
   let ready = false
   let revealed = false
   let samples = 0
@@ -377,6 +384,7 @@ export async function startExperience(overlay: Overlay) {
 
       applyCamera(phase, pos, target, up, camera, clock)
       dof.target = phase.screen === 'field' ? focusPoint : target
+      dof.bokehScale = phase.screen === 'field' || phase.screen === 'rift' ? 0 : softGpu ? 0.08 : 0.12
       applyGrade(phase, bloom, chromatic, warp, tone, vignette, frost, camera.aspect)
       overlay.setFlash(phase.flash * 0.35)
       overlay.setUiDim(phase.screen === 'rings' ? 1 : 1 - phase.burst * 0.04)
@@ -857,17 +865,17 @@ function applyGrade(
   const heroGlow = phase.screen === 'field' || phase.screen === 'rift'
   frost.setGrade(phase.screen === 'meteor' || figure ? 1 : 0)
   if (rings) {
-    bloom.intensity = 0.42
-    bloom.luminanceMaterial.threshold = 0.88
-    bloom.mipmapBlurPass.radius = 0.48
+    bloom.intensity = 0.5
+    bloom.luminanceMaterial.threshold = 0.82
+    bloom.mipmapBlurPass.radius = 0.72
   } else if (figure) {
     bloom.intensity = 0.08
     bloom.luminanceMaterial.threshold = 0.94
     bloom.mipmapBlurPass.radius = 0.35
   } else if (heroGlow) {
-    bloom.intensity = 0.16 + burst * 0.03
-    bloom.luminanceMaterial.threshold = 0.9
-    bloom.mipmapBlurPass.radius = 0.35
+    bloom.intensity = 0.1 + burst * 0.02
+    bloom.luminanceMaterial.threshold = 0.93
+    bloom.mipmapBlurPass.radius = 0.16
   } else {
     bloom.intensity = 0.08
     bloom.luminanceMaterial.threshold = 0.96
