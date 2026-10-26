@@ -298,6 +298,7 @@ export async function startExperience(overlay: Overlay) {
         minusZ: project(0.3, 1.8, -1.5),
         bounds: brickScreenBounds(igloo, camera, probe),
         fox: objectScreenBounds(figureGroup, camera, probe),
+        wire: igloo?.wireStats ?? null,
       }
     }
   }
@@ -894,19 +895,20 @@ function applyGrade(
   const rings = phase.screen === 'rings'
   const heroGlow = phase.screen === 'field' || phase.screen === 'rift'
   frost.setGrade(phase.screen === 'meteor' || figure ? 1 : 0)
+  frost.setExposure(phase.screen === 'field' ? 1.34 : 1)
   if (rings) {
     bloom.intensity = 0.62
     bloom.luminanceMaterial.threshold = 0.68
     bloom.mipmapBlurPass.radius = 0.46
   } else if (figure) {
-    bloom.intensity = 0.08
-    bloom.luminanceMaterial.threshold = 0.94
-    bloom.mipmapBlurPass.radius = 0.35
+    bloom.intensity = 0.06
+    bloom.luminanceMaterial.threshold = 0.96
+    bloom.mipmapBlurPass.radius = 0.08
   } else if (heroGlow) {
-    // Tight radius so the gap light blooms without mip-blurring the brick faces.
-    bloom.intensity = 0.85
+    // Threshold stays on the seams. A smaller radius keeps the brick faces from mip-blurring.
+    bloom.intensity = 0.92
     bloom.luminanceMaterial.threshold = 0.7
-    bloom.mipmapBlurPass.radius = 0.18
+    bloom.mipmapBlurPass.radius = 0.11
   } else {
     bloom.intensity = 0.08
     bloom.luminanceMaterial.threshold = 0.96
@@ -915,7 +917,7 @@ function applyGrade(
   vignette.darkness = 0.55
   vignette.offset = 0.35
   const wireIntro = phase.screen === 'field' && phase.solid < 0.45
-  const fringe = wireIntro || rings ? 0 : 0.0011 + (phase.chroma > 0.02 ? phase.chroma * 0.001 : 0)
+  const fringe = wireIntro || rings || figure ? 0 : 0.0011 + (phase.chroma > 0.02 ? phase.chroma * 0.001 : 0)
   chromatic.offset.set(fringe, fringe * 0.45)
   warp.setWarp(phase.ripple, phase.blur, phase.glitch, phase.white, phase.riftT + phase.figureT, aspect)
 }

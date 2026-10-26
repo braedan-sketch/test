@@ -140,14 +140,25 @@ function latticeDisc(source: Material | Material[]) {
       '#include <map_fragment>',
       `#include <map_fragment>
        {
+         vec2 uv = vMapUv;
          float luma = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-         float line = smoothstep(0.34, 0.62, luma);
-         diffuseColor.rgb *= mix(0.72, 1.45, line);
-         diffuseColor.a = mix(min(diffuseColor.a, 0.22), 0.46, line);
+         vec2 g = uv * vec2(16.0, 12.0);
+         vec2 f = abs(fract(g) - 0.5);
+         float d = min(min(f.x, f.y), min(abs(fract(g.x + g.y) - 0.5), abs(fract(g.x - g.y) - 0.5)));
+         float stroke = 1.0 - smoothstep(0.014, 0.036, d);
+         vec2 g2 = uv * vec2(7.0, 5.0) + vec2(0.17, 0.31);
+         vec2 f2 = abs(fract(g2) - 0.5);
+         float d2 = min(min(f2.x, f2.y), min(abs(fract(g2.x + g2.y) - 0.5), abs(fract(g2.x - g2.y) - 0.5)));
+         float stroke2 = 1.0 - smoothstep(0.018, 0.044, d2);
+         float line = max(stroke, stroke2 * 0.9);
+         vec3 milk = mix(vec3(0.76, 0.83, 0.9), diffuseColor.rgb, 0.22);
+         diffuseColor.rgb = mix(milk, vec3(0.98, 0.99, 1.0), line);
+         float disc = smoothstep(0.03, 0.14, max(diffuseColor.a, luma));
+         diffuseColor.a = disc * mix(0.08, 0.94, line);
        }`,
     )
   }
-  material.customProgramCacheKey = () => 'lattice-disc-v6'
+  material.customProgramCacheKey = () => 'lattice-disc-v7'
   return material
 }
 

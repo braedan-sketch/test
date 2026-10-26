@@ -98,16 +98,16 @@ function dressCrystal(mesh: Mesh, envMap: Texture, low: boolean) {
     // Opaque figure card so the transmission pass can refract it. Haze below the cutoff is discarded.
     source.transparent = false
     source.opacity = 1
-    source.alphaTest = 0.34
+    source.alphaTest = 0.18
     source.depthWrite = true
     source.depthTest = true
     source.side = DoubleSide
     source.fog = false
     source.metalness = 0
     source.roughness = 0.85
-    source.emissiveIntensity = 0.8
+    source.emissiveIntensity = 0.42
     source.color.set('#e4eaee')
-    source.emissive.set('#d7dee4')
+    source.emissive.set('#d5dee6')
     muteSmoke(source)
     mesh.renderOrder = 0
     return
@@ -120,9 +120,9 @@ function dressCrystal(mesh: Mesh, envMap: Texture, low: boolean) {
   source.attenuationColor.setRGB(0.82, 0.89, 0.97, LinearSRGBColorSpace)
   source.attenuationDistance = 2
   source.color.set('#f4f7f8')
-  source.roughness = 0.16
+  source.roughness = 0.9
   source.metalness = 0
-  source.normalScale.set(0.45, 0.45)
+  source.normalScale.set(1.55, 1.55)
   source.iridescence = 0
   source.dispersion = 0
   source.clearcoat = 0
@@ -141,7 +141,11 @@ function dressCrystal(mesh: Mesh, envMap: Texture, low: boolean) {
   mesh.renderOrder = 1
 }
 
-/** Pull the baked card toward grey so the refracted image is smoke, not a brown coin. */
+/**
+ * The baked penguins are hard black cut-outs. Blur the card a couple of pixels,
+ * then composite it at about 0.42 over the glass tint. The card stays opaque:
+ * a transparent card is dropped from the transmission pass and the shell hides it.
+ */
 function muteSmoke(source: MeshStandardMaterial) {
   const prior = source.onBeforeCompile
   const priorKey = source.customProgramCacheKey.bind(source)
@@ -149,23 +153,34 @@ function muteSmoke(source: MeshStandardMaterial) {
     prior.call(source, shader, renderer)
     shader.fragmentShader = shader.fragmentShader
       .replace(
-        '#include <color_fragment>',
-        `#include <color_fragment>
-        {
-          float y = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(y), 0.45);
-        }`,
+        '#include <map_fragment>',
+        `#ifdef USE_MAP
+          vec2 smokeDx = dFdx(vMapUv);
+          vec2 smokeDy = dFdy(vMapUv);
+          vec4 smokeTex = texture2D(map, vMapUv);
+          smokeTex += texture2D(map, vMapUv + smokeDx * 2.2);
+          smokeTex += texture2D(map, vMapUv - smokeDx * 2.2);
+          smokeTex += texture2D(map, vMapUv + smokeDy * 2.2);
+          smokeTex += texture2D(map, vMapUv - smokeDy * 2.2);
+          smokeTex /= 5.0;
+          #ifdef DECODE_VIDEO_TEXTURE
+            smokeTex = sRGBTransferEOTF(smokeTex);
+          #endif
+          diffuseColor *= smokeTex;
+        #endif`,
       )
       .replace(
-        '#include <emissivemap_fragment>',
-        `#include <emissivemap_fragment>
+        '#include <opaque_fragment>',
+        `#include <opaque_fragment>
         {
-          float y = dot(totalEmissiveRadiance, vec3(0.2126, 0.7152, 0.0722));
-          totalEmissiveRadiance = mix(totalEmissiveRadiance, vec3(y), 0.55);
+          vec3 glass = vec3(0.64, 0.70, 0.76);
+          vec3 smoked = mix(glass, gl_FragColor.rgb, 0.42);
+          float y = dot(smoked, vec3(0.2126, 0.7152, 0.0722));
+          gl_FragColor.rgb = mix(smoked, vec3(y * 0.94, y, y * 1.05), 0.45);
         }`,
       )
   }
-  source.customProgramCacheKey = () => `${priorKey()}-crystal-smoke-v5`
+  source.customProgramCacheKey = () => `${priorKey()}-crystal-smoke-v6`
 }
 
 /** v5 publishes thickness on the shell. Fall back to the measured 1.4996 m. */
