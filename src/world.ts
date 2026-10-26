@@ -140,12 +140,12 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
     entry.roughness = 1
     entry.metalness = 0
     entry.envMapIntensity = 0
-    entry.normalScale.set(1, 1)
+    entry.normalScale.set(kind === 'terrain' ? 1.45 : 1, kind === 'terrain' ? 1.45 : 1)
   }
   const prior = entry.onBeforeCompile
   const priorKey = entry.customProgramCacheKey.bind(entry)
-  const curve = kind === 'terrain' ? '1.02' : '0.96'
-  const gain = kind === 'terrain' ? '1.0' : '1.04'
+  const curve = kind === 'terrain' ? '0.92' : '0.96'
+  const gain = kind === 'terrain' ? '1.06' : '1.04'
   entry.onBeforeCompile = (shader, renderer) => {
     prior.call(entry, shader, renderer)
     shader.fragmentShader = shader.fragmentShader
@@ -163,7 +163,7 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
           : '#include <lights_fragment_end>',
       )
     if (kind === 'terrain') {
-      // The mound is in the mesh. Flatten only the mid-distance past it.
+      // v12's rolling slopes stay. Only a foreground spike on +Z is knocked down.
       shader.vertexShader = shader.vertexShader.replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
@@ -178,7 +178,7 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
       )
     }
   }
-  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v13`
+  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v14`
 }
 
 function buildSky() {
@@ -275,8 +275,8 @@ function buildSnow(count: number) {
 }
 
 function fogDensity(mood: number) {
-  // The field (mood 0) matches the v11 preview: exponential fog 0.016 so the background goes soft.
-  if (mood < 0.15) return 0.016
+  // Slightly under the v11 0.016 so the new mid-distance slopes stay readable.
+  if (mood < 0.15) return 0.012
   if (mood > 1.2) return 0.0022
   return 0.0035
 }

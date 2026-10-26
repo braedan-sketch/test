@@ -136,7 +136,7 @@ export async function loadIgloo(
     if (seen.has(node)) return
     seen.add(node)
     const base = node.position.clone()
-    const outline = brickEdges(object.geometry)
+    const outline = brickEdges(object.geometry, node.position)
     if (outline.box) fitted.push({ lines: outline.geometry, box: outline.box })
     wireCounts.push(outline.count)
     if (outline.hull) hulls += 1
@@ -303,7 +303,7 @@ function dressSnow(
   entry.color.multiplyScalar(0.66)
   entry.emissive.setRGB(1, 1, 1)
   entry.emissiveIntensity = EMISSIVE_INTENSITY
-  entry.normalScale.set(0.62, 0.62)
+  entry.normalScale.set(1.35, 1.35)
   const anisotropy = renderer.capabilities.getMaxAnisotropy()
   for (const map of [entry.map, entry.normalMap, entry.roughnessMap, entry.aoMap, entry.emissiveMap, entry.metalnessMap]) {
     if (!map) continue
@@ -365,10 +365,10 @@ function dressSnow(
 }
 
 /**
- * Twelve edges of the brick's oriented box. PCA on the vertices supplies the axes,
- * so a tilted course still draws as a box instead of a convex tangle.
+ * Twelve edges of one brick. Nodes carry translation only, so the course frame
+ * is the brick's radial / up / tangent. PCA on crack vertices tipped the boxes.
  */
-function brickEdges(geometry: BufferGeometry) {
+function brickEdges(geometry: BufferGeometry, base: Vector3) {
   const position = geometry.getAttribute('position')
   const lines = new LineSegmentsGeometry()
   if (!position || position.count < 4) {
@@ -389,24 +389,7 @@ function brickEdges(geometry: BufferGeometry) {
   cx /= used
   cy /= used
   cz /= used
-  let xx = 0
-  let yy = 0
-  let zz = 0
-  let xy = 0
-  let xz = 0
-  let yz = 0
-  for (let i = 0; i < position.count; i += step) {
-    const x = position.getX(i) - cx
-    const y = position.getY(i) - cy
-    const z = position.getZ(i) - cz
-    xx += x * x
-    yy += y * y
-    zz += z * z
-    xy += x * y
-    xz += x * z
-    yz += y * z
-  }
-  const axes = principalAxes(xx, yy, zz, xy, xz, yz)
+  const axes = courseAxes(base)
   const samples: number[][] = [[], [], []]
   for (let i = 0; i < position.count; i += 1) {
     const x = position.getX(i) - cx
@@ -425,7 +408,8 @@ function brickEdges(geometry: BufferGeometry) {
     const lo = quantile(values, 0.1)
     const hi = quantile(values, 0.9)
     const mid = (lo + hi) * 0.5
-    const half = (hi - lo) * 0.5 * 0.88
+    // 0.8 keeps neighbouring courses from crossing. The volume cap catches the rest.
+    const half = (hi - lo) * 0.5 * 0.8
     min[k] = mid - half
     max[k] = mid + half
   }
@@ -550,69 +534,14 @@ function quantile(values: number[], p: number) {
   return (sorted[lo] ?? 0) * (1 - t) + (sorted[hi] ?? 0) * t
 }
 
-/** Symmetric 3x3 Jacobi. Returns an orthonormal frame, longest axis first. */
-function principalAxes(xx: number, yy: number, zz: number, xy: number, xz: number, yz: number) {
-  const a = new Float64Array([xx, xy, xz, xy, yy, yz, xz, yz, zz])
-  const v = new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1])
-  for (let iter = 0; iter < 16; iter += 1) {
-    let p = 0
-    let q = 1
-    let max = Math.abs(a[1] ?? 0)
-    if (Math.abs(a[2] ?? 0) > max) {
-      p = 0
-      q = 2
-      max = Math.abs(a[2] ?? 0)
-    }
-    if (Math.abs(a[5] ?? 0) > max) {
-      p = 1
-      q = 2
-      max = Math.abs(a[5] ?? 0)
-    }
-    if (max < 1e-12) break
-    const app = a[p * 3 + p] ?? 0
-    const aqq = a[q * 3 + q] ?? 0
-    const apq = a[p * 3 + q] ?? 0
-    const tau = (aqq - app) / (2 * apq || 1e-20)
-    const sign = tau < 0 ? -1 : 1
-    const t = sign / (Math.abs(tau) + Math.sqrt(1 + tau * tau))
-    const c = 1 / Math.sqrt(1 + t * t)
-    const s = t * c
-    for (let k = 0; k < 3; k += 1) {
-      if (k === p || k === q) continue
-      const aik = a[p * 3 + k] ?? 0
-      const aqk = a[q * 3 + k] ?? 0
-      const nik = c * aik - s * aqk
-      const nqk = s * aik + c * aqk
-      a[p * 3 + k] = nik
-      a[k * 3 + p] = nik
-      a[q * 3 + k] = nqk
-      a[k * 3 + q] = nqk
-    }
-    a[p * 3 + p] = c * c * app - 2 * s * c * apq + s * s * aqq
-    a[q * 3 + q] = s * s * app + 2 * s * c * apq + c * c * aqq
-    a[p * 3 + q] = 0
-    a[q * 3 + p] = 0
-    for (let k = 0; k < 3; k += 1) {
-      const vip = v[k * 3 + p] ?? 0
-      const viq = v[k * 3 + q] ?? 0
-      v[k * 3 + p] = c * vip - s * viq
-      v[k * 3 + q] = s * vip + c * viq
-    }
-  }
-  const order = [0, 1, 2].sort((i, j) => Math.abs(a[j * 3 + j] ?? 0) - Math.abs(a[i * 3 + i] ?? 0))
-  const first = order[0] ?? 0
-  const x = new Vector3(v[first] ?? 1, v[3 + first] ?? 0, v[6 + first] ?? 0).normalize()
-  if (x.lengthSq() < 1e-8) x.set(1, 0, 0)
-  const second = order[1] ?? 1
-  const y = new Vector3(v[second] ?? 0, v[3 + second] ?? 1, v[6 + second] ?? 0)
-  y.addScaledVector(x, -y.dot(x))
-  if (y.lengthSq() < 1e-8) {
-    const helper = Math.abs(x.y) < 0.9 ? new Vector3(0, 1, 0) : new Vector3(1, 0, 0)
-    y.crossVectors(helper, x)
-  }
-  y.normalize()
-  const z = new Vector3().crossVectors(x, y).normalize()
-  return [x, y, z]
+/** Horizontal course: tangent across the wall, up, and the outward radial. */
+function courseAxes(base: Vector3) {
+  const radial = new Vector3(base.x, 0, base.z)
+  if (radial.lengthSq() < 1e-6) radial.set(1, 0, 0)
+  else radial.normalize()
+  const up = new Vector3(0, 1, 0)
+  const tangent = new Vector3().crossVectors(up, radial).normalize()
+  return [tangent, up, radial]
 }
 
 

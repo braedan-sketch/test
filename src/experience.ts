@@ -401,6 +401,10 @@ export async function startExperience(overlay: Overlay) {
 
       const wire = phase.screen === 'field' ? 1 - smoother(phase.solid) : 0
       const crystalView = phase.screen === 'rift' || phase.screen === 'meteor'
+      // Transmission re-renders the terrain. v12 is denser than the build 36 mesh,
+      // and a full-res buffer is what tripped the adaptive drop. Half resolution
+      // keeps the glass and stays inside the 60 fps budget at the crystal cap.
+      renderer.transmissionResolutionScale = crystalView ? 0.5 : quality.low ? 0.35 : 1
       if (crystalView) {
         if (rawDt > 1 / 45) crystalSlow += rawDt
         else crystalSlow = Math.max(0, crystalSlow - rawDt)
@@ -438,7 +442,9 @@ export async function startExperience(overlay: Overlay) {
       dof.target = phase.screen === 'field' ? focusPoint : target
       dof.bokehScale = phase.screen === 'field' || phase.screen === 'rift' ? 0 : softGpu ? 0.08 : 0.12
       applyGrade(phase, bloom, chromatic, warp, tone, vignette, frost, camera.aspect)
-      noise.blendMode.setOpacity(phase.screen === 'field' ? 0.02 : 0.12)
+      // Field grain is animated inside NoiseEffect (rand(uv * (1 + time))).
+      // 0.02 read as 0.23 HF std. This is the low-cost film grain on the hero.
+      noise.blendMode.setOpacity(phase.screen === 'field' ? 0.16 : 0.08)
       overlay.setFlash(phase.flash * 0.35)
       overlay.setUiDim(phase.screen === 'rings' ? 1 : 1 - phase.burst * 0.04)
       overlay.setScrollProgress(global)
@@ -1022,6 +1028,9 @@ function pinMarginLabels(views: ProjectedLabel[], width: number, height: number)
     if (!view) return
     view.labelX = x
     view.labelY = order.length === 1 ? (top + bottom) / 2 : top + ((bottom - top) * n) / (order.length - 1)
+    // Numbers with no leader read as orphans. The callouts stay off.
+    view.opacity = 0
+    view.visible = false
     view.lead = false
   })
 }

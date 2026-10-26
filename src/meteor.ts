@@ -125,7 +125,7 @@ function dressCrystal(mesh: Mesh, envMap: Texture, low: boolean) {
   source.color.set('#c5ced4')
   source.roughness = 0.42
   source.metalness = 0
-  source.normalScale.set(2.5, 2.5)
+  source.normalScale.set(1.8, 1.8)
   if (source.normalMap) {
     source.normalMap.colorSpace = NoColorSpace
     source.normalMap.needsUpdate = true
@@ -200,16 +200,27 @@ function tameGlint(source: MeshStandardMaterial) {
     prior.call(source, shader, renderer)
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vShell;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvShell = transformed;')
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        vShell = transformed;
+        float chip = smoothstep(0.02, 0.38, transformed.x);
+        float notch = abs(fract(transformed.y * 2.6 + transformed.z * 1.7) - 0.5);
+        float stepZ = step(0.45, fract(transformed.y * 1.8 + 0.2)) - 0.5;
+        transformed.x -= chip * notch * 0.07;
+        transformed.z += chip * stepZ * 0.045;
+        transformed.y += chip * (step(0.5, fract(transformed.z * 3.1)) - 0.5) * 0.028;`,
+      )
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vShell;')
       .replace(
         '#include <normal_fragment>',
         `#include <normal_fragment>
         {
-          vec3 facet = normalize(cross(dFdx(vViewPosition), dFdy(vViewPosition)));
-          float chip = smoothstep(0.0, 0.32, vShell.x);
-          normal = normalize(mix(normal, facet, chip * 0.8));
+          vec3 q = normalize(vShell + vec3(0.001));
+          vec3 hard = normalize(vec3(q.x, sign(q.y) * max(abs(q.y), 0.35), sign(q.z) * max(abs(q.z), 0.25)));
+          float chip = smoothstep(0.0, 0.36, vShell.x);
+          normal = normalize(mix(normal, normalize(mat3(viewMatrix) * hard), chip * 0.55));
         }`,
       )
       .replace(
@@ -247,7 +258,7 @@ function tameGlint(source: MeshStandardMaterial) {
         }`,
       )
   }
-  source.customProgramCacheKey = () => `${priorKey()}-crystal-glint-v7`
+  source.customProgramCacheKey = () => `${priorKey()}-crystal-glint-v8`
 }
 
 /** v5 publishes thickness on the shell. Fall back to the measured 1.4996 m. */

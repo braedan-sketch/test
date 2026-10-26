@@ -1,12 +1,16 @@
 import {
   AdditiveBlending,
   type Blending,
+  CanvasTexture,
+  ClampToEdgeWrapping,
   Color,
   DoubleSide,
   Group,
+  LinearFilter,
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
+  NoColorSpace,
   PointLight,
   SRGBColorSpace,
   Vector3,
@@ -107,21 +111,51 @@ function dressPortal(root: Group, quality: Quality) {
     }
     const material = object.material
     if (!(material instanceof MeshStandardMaterial)) return
-    material.emissiveIntensity = 0.55
+    // Wisps stay, but the stone picks up a frosty sheen instead of matte plaster.
+    material.emissiveIntensity = 0.4
     material.metalness = 0
-    material.envMapIntensity = 0.16
-    material.normalScale.set(0.72, 0.72)
+    material.envMapIntensity = 0.48
+    material.normalScale.set(1.15, 1.15)
     material.fog = true
     material.toneMapped = true
+    frostStone(material)
     // v8 is 65k tris. Skip the shadow map so the portal can stay at DPR 2.
     object.castShadow = false
     object.receiveShadow = quality.shadows
   })
 }
 
+/** Roughness patches in the stone's own space, so the sheen does not slide with the camera. */
+function frostStone(material: MeshStandardMaterial) {
+  if (material.userData.blendyStone === true) return
+  material.userData.blendyStone = true
+  const prior = material.onBeforeCompile
+  const priorKey = material.customProgramCacheKey.bind(material)
+  material.onBeforeCompile = (shader, renderer) => {
+    prior.call(material, shader, renderer)
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vStone;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvStone = transformed;')
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vStone;')
+      .replace(
+        '#include <roughnessmap_fragment>',
+        `#include <roughnessmap_fragment>
+        {
+          vec2 cell = vStone.xz * 3.4;
+          float n = fract(sin(dot(floor(cell), vec2(127.1, 311.7))) * 43758.5453);
+          float m = fract(sin(dot(floor(cell * 0.45 + 2.0), vec2(269.5, 183.3))) * 43758.5453);
+          roughnessFactor = mix(0.22, 0.72, n * 0.6 + m * 0.4);
+        }`,
+      )
+  }
+  material.customProgramCacheKey = () => `${priorKey()}-portal-stone-v11`
+}
+
 /**
- * Many short frost scratches on a cool, nearly clear disc. A handful of strokes
- * disappeared at DPR 1.
+ * Frost is a single baked disc. The old shader looped 110 scratches per pixel
+ * and those strokes were under a pixel wide, so the portal missed 60 fps and
+ * the frost vanished at DPR 1.
  */
 function latticeDisc() {
   const material = new MeshBasicMaterial({
@@ -134,48 +168,80 @@ function latticeDisc() {
     fog: false,
     toneMapped: false,
   })
+  const frostMap = bakeFrost()
   material.onBeforeCompile = (shader) => {
+    shader.uniforms.frostMap = { value: frostMap }
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vLattice;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLattice = transformed;')
     shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform sampler2D frostMap;\nvarying vec3 vLattice;')
       .replace(
-        '#include <common>',
-        `#include <common>
-        varying vec3 vLattice;
-        float hash11(float n) {
-          return fract(sin(n * 127.1) * 43758.5453);
-        }`,
-      )
-      .replace(
-        '#include <opaque_fragment>',
-        `#include <opaque_fragment>
+        '#include <colorspace_fragment>',
+        `#include <colorspace_fragment>
         {
-          vec2 p = vLattice.xy;
-          float radius = length(p);
-          float disc = 1.0 - smoothstep(1.2, 1.46, radius);
-          float scratch = 0.0;
-          for (int i = 0; i < 110; i++) {
-            float seed = float(i) + 1.7;
-            float ang = hash11(seed * 1.7) * 6.28318;
-            vec2 dir = vec2(cos(ang), sin(ang));
-            vec2 origin = vec2(hash11(seed * 4.1), hash11(seed * 9.3)) * 2.3 - 1.15;
-            vec2 rel = p - origin;
-            float along = dot(rel, dir);
-            float across = abs(dot(rel, vec2(-dir.y, dir.x)));
-            float halfLen = 0.05 + hash11(seed * 2.9) * 0.22;
-            float alongMask = 1.0 - smoothstep(halfLen * 0.55, halfLen, abs(along));
-            float width = 0.0016 + hash11(seed * 6.1) * 0.0028;
-            float acrossMask = 1.0 - smoothstep(width, width * 2.1, across);
-            scratch = max(scratch, alongMask * acrossMask * (0.55 + hash11(seed * 8.8) * 0.45));
-          }
-          gl_FragColor.rgb = vec3(0.70, 0.76, 0.84);
-          gl_FragColor.a = disc * max(scratch * 0.92, 0.075);
+          vec2 frostUv = clamp(vLattice.xy / 2.92 + 0.5, 0.0, 1.0);
+          vec4 frost = texture2D(frostMap, frostUv);
+          float disc = 1.0 - smoothstep(1.28, 1.48, length(vLattice.xy));
+          gl_FragColor.rgb = frost.rgb;
+          gl_FragColor.a = frost.a * disc;
         }`,
       )
   }
-  material.customProgramCacheKey = () => 'lattice-disc-v10'
+  material.customProgramCacheKey = () => 'lattice-disc-v11'
   return material
+}
+
+/** Dark cool strokes, several texels wide, so the frost reads at 1x. */
+function bakeFrost() {
+  const size = 1024
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return new CanvasTexture(canvas)
+  const px = size / 2.92
+  const rand = mulberry32(0x5a17c0de)
+  const wash = ctx.createRadialGradient(size / 2, size / 2, size * 0.05, size / 2, size / 2, size * 0.46)
+  wash.addColorStop(0, 'rgba(176, 190, 204, 0.14)')
+  wash.addColorStop(1, 'rgba(176, 190, 204, 0)')
+  ctx.fillStyle = wash
+  ctx.fillRect(0, 0, size, size)
+  ctx.lineCap = 'round'
+  for (let i = 0; i < 140; i += 1) {
+    const ang = rand() * Math.PI * 2
+    const dist = Math.sqrt(rand()) * 1.22 * px
+    const originX = size / 2 + Math.cos(ang) * dist
+    const originY = size / 2 + Math.sin(ang) * dist
+    const dir = rand() * Math.PI
+    const length = (0.08 + rand() * 0.4) * px
+    ctx.strokeStyle = `rgba(48, 64, 84, ${(0.5 + rand() * 0.28).toFixed(3)})`
+    ctx.lineWidth = 5 + rand() * 6
+    ctx.beginPath()
+    ctx.moveTo(originX - Math.cos(dir) * length * 0.5, originY - Math.sin(dir) * length * 0.5)
+    ctx.lineTo(originX + Math.cos(dir) * length * 0.5, originY + Math.sin(dir) * length * 0.5)
+    ctx.stroke()
+  }
+  const texture = new CanvasTexture(canvas)
+  texture.colorSpace = NoColorSpace
+  texture.wrapS = ClampToEdgeWrapping
+  texture.wrapT = ClampToEdgeWrapping
+  texture.generateMipmaps = false
+  texture.minFilter = LinearFilter
+  texture.magFilter = LinearFilter
+  texture.needsUpdate = true
+  return texture
+}
+
+function mulberry32(seed: number) {
+  let state = seed >>> 0
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0
+    let t = state
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
 }
 
 function fxMaterial(
