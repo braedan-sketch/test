@@ -134,8 +134,8 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
   if (Array.isArray(entry) || !(entry instanceof MeshStandardMaterial)) return
   entry.fog = true
   if (kind === 'terrain') {
-    // Pale snow was holding the hero floor near 66. Push the mound darker.
-    entry.color.multiplyScalar(0.4)
+    // v8 snow is pale. A moderate grade keeps shadow in the mound.
+    entry.color.multiplyScalar(0.44)
     entry.roughness = 1
     entry.metalness = 0
     entry.roughnessMap = null
@@ -145,8 +145,8 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
   }
   const prior = entry.onBeforeCompile
   const priorKey = entry.customProgramCacheKey.bind(entry)
-  const curve = kind === 'terrain' ? '1.52' : '1.08'
-  const gain = kind === 'terrain' ? '0.84' : '1.0'
+  const curve = kind === 'terrain' ? '1.42' : '1.08'
+  const gain = kind === 'terrain' ? '0.86' : '1.0'
   entry.onBeforeCompile = (shader, renderer) => {
     prior.call(entry, shader, renderer)
     shader.fragmentShader = shader.fragmentShader
@@ -164,15 +164,15 @@ function gradeSurface(entry: Mesh['material'], kind: 'terrain' | 'range') {
           : '#include <lights_fragment_end>',
       )
     if (kind === 'terrain') {
-      // Mid-distance spikes sit past the first ring. Flatten them into the mound
-      // and leave the pad under the igloo and the far ranges.
+      // v8 builds the mound and its flank rocks inside about 11 m. Flatten only
+      // the mid-distance spikes past that, and leave the pad and the far ranges.
       shader.vertexShader = shader.vertexShader.replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
          vec4 spikeWorld = modelMatrix * vec4(transformed, 1.0);
          float spikeR = length(spikeWorld.xz);
-         float spikeBand = smoothstep(8.0, 13.0, spikeR) * (1.0 - smoothstep(58.0, 82.0, spikeR));
-         float mound = 0.12 - smoothstep(6.0, 42.0, spikeR) * 0.72;
+         float spikeBand = smoothstep(14.0, 20.0, spikeR) * (1.0 - smoothstep(48.0, 72.0, spikeR));
+         float mound = -0.25 - smoothstep(14.0, 40.0, spikeR) * 0.4;
          transformed.y = mix(transformed.y, min(transformed.y, mound), spikeBand);`,
       )
     }

@@ -873,9 +873,9 @@ function applyGrade(
     bloom.luminanceMaterial.threshold = 0.94
     bloom.mipmapBlurPass.radius = 0.35
   } else if (heroGlow) {
-    bloom.intensity = 0.1 + burst * 0.02
-    bloom.luminanceMaterial.threshold = 0.93
-    bloom.mipmapBlurPass.radius = 0.16
+    bloom.intensity = 0.32 + burst * 0.04
+    bloom.luminanceMaterial.threshold = 0.86
+    bloom.mipmapBlurPass.radius = 0.3
   } else {
     bloom.intensity = 0.08
     bloom.luminanceMaterial.threshold = 0.96
@@ -883,7 +883,8 @@ function applyGrade(
   }
   vignette.darkness = 0.55
   vignette.offset = 0.35
-  const fringe = 0.0011 + (phase.chroma > 0.02 ? phase.chroma * 0.001 : 0)
+  const wireIntro = phase.screen === 'field' && phase.solid < 0.45
+  const fringe = wireIntro ? 0 : 0.0011 + (phase.chroma > 0.02 ? phase.chroma * 0.001 : 0)
   chromatic.offset.set(fringe, fringe * 0.45)
   warp.setWarp(phase.ripple, phase.blur, phase.glitch, phase.white, phase.riftT + phase.figureT, aspect)
 }

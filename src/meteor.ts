@@ -104,22 +104,23 @@ function dressCrystal(mesh: Mesh, envMap: Texture, low: boolean) {
     source.side = DoubleSide
     source.fog = false
     source.metalness = 0
-    source.roughness = Math.min(source.roughness, 0.35)
-    // The v2 cards are a warm brown palette. Cool the multiplier so they don't read as amber.
-    source.color.setRGB(0.55, 0.66, 0.8, LinearSRGBColorSpace)
+    source.roughness = Math.min(source.roughness, 0.45)
+    source.emissiveIntensity = Math.min(source.emissiveIntensity || 0.5, 0.42)
+    // v3's picture is warm tan. Cool the multiplier so the figures stay readable and stop reading as amber.
+    source.color.setRGB(0.72, 0.8, 0.94, LinearSRGBColorSpace)
     mesh.renderOrder = 0
     return
   }
   if (!(source instanceof MeshPhysicalMaterial)) return
   source.transmission = 1
-  source.ior = 1.45
+  source.ior = 1.5
   source.thickness = shellThickness(mesh, source.thickness)
-  // Keep a cool volume from the file. Replace a missing or warm one so the glass stays blue-grey.
+  // v3 publishes a pale volume, which leaves the glass clear and bright. Use a dusky blue-grey over one thickness.
   const peak = Math.max(source.attenuationColor.r, source.attenuationColor.g, source.attenuationColor.b)
   const warmVolume = source.attenuationColor.r > source.attenuationColor.b + 0.02
   if (!Number.isFinite(source.attenuationDistance) || source.attenuationDistance > 12 || warmVolume || peak > 0.7) {
-    source.attenuationColor.setRGB(0.5, 0.64, 0.8, LinearSRGBColorSpace)
-    source.attenuationDistance = 0.95
+    source.attenuationColor.setRGB(0.58, 0.7, 0.84, LinearSRGBColorSpace)
+    source.attenuationDistance = 1.45
   }
   if (source.color.r > source.color.b + 0.04) {
     source.color.r = source.color.r * 0.4 + 0.43
@@ -131,7 +132,6 @@ function dressCrystal(mesh: Mesh, envMap: Texture, low: boolean) {
   source.iridescenceThicknessRange = [420, 560]
   source.dispersion = 0
   source.specularIntensity = 0.28
-  source.roughness = Math.min(source.roughness, 0.16)
   source.envMap = envMap
   source.envMapIntensity = 0.1
   source.fog = false
@@ -158,13 +158,13 @@ function shellThickness(mesh: Mesh, loaded: number) {
 function studioRoom(renderer: WebGLRenderer) {
   const room = new RoomEnvironment()
   const strips: Array<[number, number, number, number, number, number, number]> = [
-    [7.2, 15.5, 9.4, 0.45, 6.4, 0.35, 4],
-    [-5.4, 19.2, 4.6, 9.5, 0.32, 0.28, 2],
-    [1.4, 7.2, 13.6, 4.2, 0.4, 0.22, 5],
+    [7.2, 15.5, 9.4, 0.45, 6.4, 0.35, 1.15],
+    [-5.4, 19.2, 4.6, 9.5, 0.32, 0.28, 0.7],
+    [1.4, 7.2, 13.6, 4.2, 0.4, 0.22, 1.3],
   ]
   for (const [x, y, z, sx, sy, sz, intensity] of strips) {
     const material = new MeshBasicMaterial({ toneMapped: false })
-    material.color.setRGB(intensity, intensity, intensity)
+    material.color.setRGB(intensity * 0.82, intensity * 0.9, intensity)
     const strip = new Mesh(new BoxGeometry(sx, sy, sz), material)
     strip.position.set(x, y, z)
     room.add(strip)

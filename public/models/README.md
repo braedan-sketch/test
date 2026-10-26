@@ -1,24 +1,23 @@
-# BLENDY web assets: igloo v10, terrain v7, mountains v7, rings v3, crystal v2 (handoff_v8, 2026-10-23)
+# BLENDY web assets: igloo v11, terrain v8, mountains v7, rings v4, crystal v3 (handoff_v9, 2026-10-26)
 
-This replaces `handoff_v7/`. **All five files changed.** They all use **Draco + KTX2** (Basis). There is no meshopt anywhere. Node names and extras are the same as v7, so the igloo separation, rings explode and crystal code should work as is.
+This replaces `handoff_v8/`. **mountains.glb is byte-identical to handoff_v8**; the other four changed. All files use **Draco + KTX2** (Basis), with no meshopt. Node names and extras are unchanged, and all five pass `gltf-transform validate` with no errors.
 
-Built in Blender 5.2.2 on the M2 Pro. Sources are in `~/Desktop/blendy/web_assets_v2` on the Mac:
-- Igloo: `scripts/igloo_layout10.py`, `igloo_build10.py`, `snowmat10.py`, `igloo_bake10.py`, `export10.py`, `compose_hero11.py`
-- Terrain/mountains: `terrain_fix7.py`, `terrain_bake7.py`, `tex_lift.py` (paler/less-contrast grade), `export10.py` (terrain), `export10m.py` (mountains)
-- Rings v3: `rings_build3.py`, `ringmat3.py`, `rings_bake3.py`, `rings_fx3.py`, `export_rings3.py`, `rings_compose3.py`
-- Crystal v2: `crystal_build2.py`, `crystal_fx.py` (core image), `crystal_bake2.py`, `core_fit.py`, `crystal_compose2.py`, `export_crystal2.py`
-- Compression: `tools/ktxdraco.sh`. The crystal also gets an ETC1S pass on `thicknessTexture` and a JSON patch of `thicknessFactor`.
-- Blends: `igloo_baked_v10.blend`, `terrain_baked_v7.blend`, `rings_baked_v3.blend`, `crystal_baked_v2b.blend`. Raw maps are in `tex/` (`igloo10_*`, `ground7l_*`, `skirt7_*`, `mtn_*7_*`, `rings3_*`, `crystal2_*`).
+Built in Blender 5.2.2 on the M2 Pro. Sources are in `~/Desktop/blendy/web_assets_v2/scripts/` on the Mac:
+- Igloo: `igloo_layout11`, `igloo_build11`, `snowmat11`, `igloo_bake11`, `export11`, `compose_hero12`
+- Terrain: `terrain_fix8`, `terrainmat5`, `terrain_bake8`, `tex_lift8`, `glow_blur`
+- Crystal: `crystal_build3`, `crystal_fx3`, `crystalmat3`, `crystal_bake3`, `core_fit3`, `crystal_compose3`, `export_crystal3`
+- Rings: `rings_build4`, `rings_bake4` (with `ringmat3`), `rings_fx4`, `rings_compose4`, `export_rings4`
+- Chains: `run_v11*.sh`
+- Blends: `igloo_baked_v11`, `terrain_baked_v8`, `crystal_baked_v3b`, `rings_baked_v4`
+- Maps: `tex/igloo11_*`, `ground8l_*`, `crystal3_*`, `rings4_*`
 
 | file | size | contents |
 |---|---|---|
-| igloo.glb | 5.44 MB | `IGLOO` root plus 40 block nodes `igloo_brick_000…039`, ~71.5k tris. KTX2 2048² (normal UASTC) |
-| terrain.glb | 3.51 MB | GROUND + SKIRT. KTX2; ground normal WebP, skirt normal UASTC 1024 |
-| mountains.glb | 3.29 MB | MOUNTAINS_NEAR/MID/FAR, paler grade, normals UASTC 1024 |
-| rings.glb | 3.64 MB | `RINGS` root: ring_outer (8 segments), ring_inner (6 pieces), lattice, halo |
-| crystal.glb | 4.65 MB | `CRYSTAL` root: crystal_shell (glass, ~8.1k tris) + crystal_core (3 image cards). KHR_materials_transmission + KHR_materials_volume |
-
-All five pass `gltf-transform validate` with no errors.
+| igloo.glb | 5.32 MB | `IGLOO` + 40 nodes `igloo_brick_000…039` (extras row/t/kind/bidx), ~71.7k tris |
+| terrain.glb | 2.84 MB | GROUND + SKIRT; the ground now has a raised mound under the igloo |
+| mountains.glb | 3.29 MB | unchanged from handoff_v8 |
+| rings.glb | 3.71 MB | `RINGS`: ring_outer (8), ring_inner (6), lattice (now a frosted disc), halo |
+| crystal.glb | 2.48 MB | `CRYSTAL`: crystal_shell (~12k tris) + crystal_core (3 image cards) |
 
 ```js
 loader.setDRACOLoader(new DRACOLoader().setDecoderPath('/draco/'));
@@ -30,29 +29,33 @@ loader.setKTX2Loader(new KTX2Loader().setTranscoderPath('/basis/').detectSupport
 - Set the camera far plane to at least 1500 for the mountains.
 - rings.glb and crystal.glb are their own scenes, each centred on its own origin. rings.glb is the portal section. Its axis is glTF **+Z**: the portal faces a camera placed on +Z, looking toward −Z. It is centred on its own origin.
 
-## Igloo v10: pale frosted ice, no grid, taller dome
-- **Node structure is unchanged:**
-  - `IGLOO` root with `igloo_brick_000…039` children.
-  - Node translation = block centroid.
-  - extras: row/t/kind/bidx.
-  - Courses: 11 / 10 / 9 / 7 blocks + 3 cap blocks.
-  - **bbox changed:** x −1.95…2.05, y −0.17…2.35 (was 2.08, so the dome is about 0.27 m taller), z −2.07…1.89. The footprint radius is unchanged (≈1.9 m), so terrain still lines up.
-- **The grid pattern is gone.** It came from the UI wave bands in the snow material leaking into the emissive map. They have been removed.
-- **Faces are pale frosted ice:**
-  - baseColor is light blue-white (≈0.62–0.89 linear) with soft frost noise and a slightly bluer cavity.
-  - roughness is 0.55–0.8.
-  - The emissive carries a faint internal frost brightness (≈14% strength, noise-modulated) on top of the edge/gap glow, so no face goes near-black.
-- **Glow:** the per-block directional weighting is kept from v9 (top edges lead, bottoms weak, uneven sides). The gap/edge emissive colour is now near-white (0.94, 0.97, 1.0) and the curve is lifted (`^0.85`), so gap light reads brighter and whiter.
-- **Layout:** blocks are 0.98 × 0.58 m (was shorter), the dome is taller and rounder, and the rows have more jitter: random width 0.78–1.22 and up to ~1.2× phase jitter on the upper courses. The lopsided v8 transform and the v9 slabs are kept.
-- **Suggested three.js values:** `emissiveIntensity` ≈ 3–3.4, interior point light at (0, 0.9, 0) ≈ 1.3× the v9 value, bloom threshold ≈ 0.85, strength ≈ 0.6. Fog: `FogExp2` with a pale blue-grey colour; the preview used Cycles volume density 0.008 (double v9). The Cycles preview used EMIS 3.4, interior light 2400 W, exposure −0.1.
+## Igloo v11: darker translucent ice, crisp even seams, clean dome
+- Same node scheme as v5–v10 (40 blocks; courses 11/10/9/7 + 3 cap).
+- bbox: x −1.94…2.05, y −0.17…2.26, z −2.07…1.89.
+- **Faces:**
+  - Darker blue ice (≈0.40–0.73 linear), glossier (roughness ≈0.28–0.46).
+  - Finer grain: displacement and bump about halved, with a finer noise scale.
+- **Seams:**
+  - The edge band is narrower and brighter, near-white (0.96, 0.98, 1.0).
+  - The per-block directional weighting is now near-even (0.75–1.0 on every edge), so the glow runs through all seams.
+- **Translucency look:** a wide glow fading in from each block's edges toward its centre, ×0.20 and tinted icy blue (0.62, 0.80, 1.0), packed into the emissive. There is no real subsurface scattering in the GLB.
+- **Shape:**
+  - The courses are no longer tumbled; only the 3 cap slabs are tilted.
+  - Row jitter and the sideways lean of the top are both about halved, giving a cleaner dome.
+- **Suggested three.js values:** `emissiveIntensity` ≈ 3.4. Keep the interior point light low (≈0.4× the v10 value), or the doorway gaps hot-spot. Bloom threshold 0.85, strength 0.55.
+- Preview: EMIS 3.4, interior light 700 W, camera (−10.8, 9.5, 2.4) → (0, 0, 0.9), 70 mm, fog 0.008.
 
-## Terrain v7 + mountains v7: paler, softer
-- Pad follows the v10 footprint (same radius). The near-field crags are lower: rough terrain keeps 75% height outside the smooth zone, and sparse ridges reach 45% height inside it.
-- Ground re-baked against the v10 igloo (`tex/ground7_*`; the light-spill map `ground7l_glow.png` stays on the Mac, not in the GLB).
-- **Grade (`tex_lift.py`): albedo lifted and contrast reduced**, `c' = lift + gain·c`: ground 0.14 + 0.86c, skirt 0.22 + 0.78c, mountains 0.26–0.30 + 0.70–0.74c. AO is floored at 0.70 (ground) up to 0.88 (far mountains), so distant crags stop reading as dark and contrasty.
-- The mountains were re-exported only for the new maps; the geometry is unchanged from v5.
+## Terrain v8: raised rocky snow mound
+- The igloo pad (y ≈ +0.05) is now the top of a mound. Around the igloo the ground falls about 1.7 m between 0.2 m and 7 m from the footprint (about −1.6 m at r = 8 m), blending back to the natural terrain by about 11 m.
+- Snow-covered rock ridges break out of the mound flanks, starting 0.6 m from the footprint and fading out by 6–10 m.
+- **Sparkle removed:**
+  - no pointiness speckle;
+  - no glossy "glaze" patches;
+  - the fine-grain bump is cut to 12%;
+  - the baked igloo light-spill map (`ground8l_glow.png`, Mac only, not in the GLB) has its fireflies removed; the raw copy is `ground8l_glow_raw.png`.
+- The ground albedo uses the same paler grade as v7 (`ground8l_`). The skirt and mountains are unchanged.
 
-## Rings v3: worn stone grit, visible lattice
+## Rings v4: frosted disc, softer wispy halo, thicker inner arcs
 Hierarchy, with names exactly as below:
 ```
 RINGS
@@ -81,7 +84,12 @@ RINGS
     | `ring_inner_03`: small arc, 170–290° | 0.42 | 0.15 | 0.22 | +0.40 |
     | `ring_inner_04`, `_05`: loose blocks | | | | |
 
-- **v3 changes (on top of v2):**
+- **v4 changes:**
+  - The `lattice` node is now a **subtle frosted glass disc**: fine frost grain, soft frost patches, tiny ice-crystal cell walls and a faint thin triangulated lattice. Alpha is ≈0.14–0.5 (was ≈0.06 + wires).
+  - Halo: the core is softer and dimmer (×0.6, wider falloff). **Blue wisps** (sheared ridged noise in angle/radius) stream in and out of the ring.
+  - Inner arcs are thicker: outer arcs W 0.30 × D 0.38 at R 1.10; the dominant C is W 0.46 × D 0.56; the small arc is W 0.22 × D 0.30 at R 0.45. The loose blocks are 0.26 and 0.19. The `R` extras changed to match. The dimension table below is from v2/v3; use the node extras.
+  - Suggested: lattice colour ×1.2–1.6 (additive), halo ×5–6. Preview: LAT 1.6, HAL 6.
+- **v3 changes (kept):**
   - Some grit is back: displacement cl1 0.013 / cl2 0.0042 / vo 0.0045 with one lighter smoothing pass, bump 0.6, pitting and frost speckle back on, full cavity.
   - The halo soft term is reduced (0.55·e^(−d/0.20) + 0.16·e^(−d/0.5), was 0.75/0.3). The lattice lines are brighter and thicker (width 0.009) and its alpha is ~0.06 base + lines, so the triangulated wires read inside the halo.
   - Same pieces, names, extras and dimensions as v2.
@@ -109,46 +117,38 @@ RINGS
   - 40 W core light;
   - bloom threshold 0.85, strength 0.95, size 0.7.
 
-## Crystal v2
+## Crystal v3
 ```
 CRYSTAL
-├─ crystal_shell   irregular chunky rock-crystal glass, ≈ 0.90 × 1.34 × 0.73 m (x, y-up, z), ~8.1k tris
-└─ crystal_core    3 bent image cards (the brownish inner structure), fully inside the shell
+├─ crystal_shell   chunky blocky-irregular rock crystal, ≈ 1.23 × 1.27 × 0.96 m (x, y-up, z), ~12k tris
+└─ crystal_core    3 bent image cards with the brown "penguins" picture, inside the shell
 ```
-- **Modelling:**
-  - The silhouette is no longer a box: it is the convex hull of 22 jittered points, leaning and asymmetric, with facets merged at 4°.
-  - Angle-limited bevel (0.065 m, 5 segments), 14 edge chips.
-  - **One big broken face** at the lower front-right: a large fracture chunk with crumbly, gritty displacement. It is frosted and rough, as in their stop_029.
-  - Baked from a 67k-face HIGH.
-- **`crystal_glass`:** same as v1.
-  - `KHR_materials_transmission`: transmission 1, IOR 1.5.
-  - `KHR_materials_volume`: thicknessTexture = **G channel** of `crystal2_thickcloud`, **thicknessFactor = 0.887 m**, attenuation as v1.
-  - normal UASTC 2048², ORM (R = AO, G = roughness; the fracture ≈ 0.6+), baseColor pale blue-grey with a frosted fracture.
-  - R channel of thickcloud = inner-structure depth (1 = 0.617 m), for a custom shader.
-- **`crystal_core` → material `crystal_image`:**
-  - A 1024² RGBA texture: a warped-fbm brown palette (dark 0.08 → light 0.80) with lighter belly areas, a vague figure and frost streaks. Each card uses a 0.5 × 0.5 UV tile with a ragged alpha.
-  - emissive = same texture × 0.35, double-sided, alphaMode BLEND.
-  - The cards are pulled toward the centre per vertex (`core_fit.py`) so that every vertex is at least 7 cm inside the shell; nothing pokes through.
-  - In three.js, render the cards before the shell, or into the transmission render target, so they show through the glass. `depthWrite = false`.
-- **Preview** (`crystal_compose2.py`): camera 5.2 m, 62 mm lens, the same lights and sky as v1, thin film 260 nm (not in the GLB; add `iridescence` ≈ 0.4 in `MeshPhysicalMaterial`).
-- Extras on `crystal_shell`: `thickness_max_m` 0.887, `cloud_max_m` 0.617.
+- **Shape:** the convex hull of a jittered box. 85% of its corners are clipped into 2–3 points, giving big uneven facets, plus 9 face points and a slight lean/skew. Bevel 0.065 m, 14 edge chips.
+- **Broken face:** the big lower-front-right fracture, plus **46 small sharp cleavage cuts** snapped onto the surface. That gives a fine crystalline break instead of v2's hammered/crumb displacement. The hammer displacement is gone everywhere, and the fracture roughness is glassy (≈0.2–0.4).
+- **`crystal_glass`:** transmission 1, IOR 1.5. `KHR_materials_volume` uses thickness = G of `crystal3_thickcloud`, **thicknessFactor = 1.455 m**. This is the measured 99th-percentile thickness of the final v3 shell; the earlier 1.357 figure came from the first v3 build. The R channel is inner-structure depth (1 = 0.695 m).
+- **`crystal_image`** (core): a 1024² RGBA picture with a warm tan/brown palette, lighter areas, and soft-edged dark penguin-like figures with light bellies. Alpha ≈ 0.75 in the tile centres. Emissive ×0.5, double-sided, BLEND. Render it before the shell or into the transmission target, with `depthWrite = false`.
+- Extras on `crystal_shell`: `thickness_max_m` 1.455, `cloud_max_m` 0.695.
+- Preview: `ROT=(0.15,-0.1,0.75)`, 62 mm lens, 5.2 m away.
 
-## Known limitations (vs igloo.inc)
-- **Igloo v10:**
-  - Faces are now pale and the grid is gone, but they read as **packed snow or sugar cubes rather than translucent ice**. There is no real subsurface or refraction, and the surface grain is too coarse and fuzzy.
-  - Their blocks are darker-faced with crisp, bright white seams; ours are bright everywhere, so the gap glow has less contrast.
-  - The glow is strongest low in the centre (doorway gaps). Theirs runs evenly through all the seams.
-  - The top courses look like a tumbled pile rather than a clean dome.
-  - Their igloo sits on a raised rocky mound; ours sits on a flat smooth pad.
-- **Terrain/mountains:** paler and fogged now, close in tone to theirs. The mid-distance crags are still slightly busier, and the near snow has fine sparkle speckle theirs doesn't.
-- **Rings v3:**
-  - The grit is back (it now reads as stone, not clay) and the lattice is visible.
-  - The lattice reads as a scattered white wire net. Theirs is a subtle frosted disc.
-  - Our halo is a harder, brighter white line; theirs is softer with wispy blue streaks.
-  - Our inner arcs are thinner and less chunky. There is no background fog or wisps.
-- **Crystal v2:**
-  - The silhouette is irregular and the broken face is there.
-  - Ours is more elongated and leaf-shaped than their chunkier block.
-  - The inner structure reads as a warm brown haze, not the clearly image-like figure in theirs.
-  - The fracture frosting is a coarse hammered texture rather than their fine crystalline break.
-  - There are no UI callouts (those are DOM).
+## Known limitations vs igloo.inc (blunt)
+- **Igloo v11: overcorrected toward tidy.**
+  - The seams now punch and glow evenly, but it reads as a neat textbook igloo with flat grey "screen" faces in thick glowing frames.
+  - Theirs is lumpier, with varied block sizes, chunky tumbled and overhanging blocks, and faces that vary in tone and show inner structure.
+  - Our faces are too uniform from block to block.
+- **Terrain v8:**
+  - The mound is there, but it's pale and smooth with small pointy spikes.
+  - Theirs is a darker, craggier rocky mound filling the foreground.
+  - Our foreground rocks read as spiky cones.
+  - The mid-distance crags are still busy.
+- **Crystal v3:**
+  - Much closer: chunky and irregular, with a crystalline break and a picture inside.
+  - Ours is now a bit too wide/squat, and its glass too clear and bright. Theirs is a dusky blue-grey with frosted, smoky depth.
+  - The inner figures are warmer/oranger and double up through refraction. Theirs are muted and integrated into a smoky cloud.
+  - A small dark internal sliver remains on the right face.
+- **Rings v4:**
+  - Thicker arcs and a softer, wispy halo are closer.
+  - The frosted disc is so subtle it barely reads.
+  - The stone is still too lumpy and grainy vs their smooth worn surface.
+  - The wisps are fine and wiry rather than their broad blue flares.
+  - No background fog streaks.
+- No UI callouts on any asset (those are DOM).

@@ -153,7 +153,7 @@ export async function loadIgloo(
       for (const slot of solidUniforms) slot.value = solid
       group.visible = dissolve < 0.985
       const present = smoother(clamp(solid * 1.15, 0, 1)) * (1 - smoother(dissolve))
-      gapLight.intensity = present * 2.4
+      gapLight.intensity = present * 0.85
       // Stops 00–01 stay wire. The solid writes nothing and casts nothing, so it
       // cannot leave a black disc in the snow under the dome.
       const fade = smoother(clamp((solid - 0.04) / 0.26, 0, 1))
@@ -223,9 +223,8 @@ function dressSnow(
   const existing = shared.get('snow')
   if (existing) return existing
   const entry = source.clone()
-  // The v10 multiply of 0.85 still left the faces brighter than the seams.
-  // Diffuse is scaled down in the shader. Emissive is left for the gaps.
-  entry.color.multiplyScalar(0.62)
+  // v11 faces are already the darker ice. Scale them down once so the seams stay brighter.
+  entry.color.multiplyScalar(0.5)
   entry.emissive.setRGB(1, 1, 1)
   entry.emissiveIntensity = EMISSIVE_INTENSITY
   entry.metalness = 0
@@ -251,15 +250,10 @@ function dressSnow(
         uniform float uSolid;`,
       )
       .replace(
-        '#include <color_fragment>',
-        `#include <color_fragment>
-        diffuseColor.rgb *= 0.62;`,
-      )
-      .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
         float seam = max(totalEmissiveRadiance.r, max(totalEmissiveRadiance.g, totalEmissiveRadiance.b));
-        totalEmissiveRadiance *= mix(0.2, 2.6, smoothstep(0.18, 0.62, seam));
+        totalEmissiveRadiance *= mix(0.35, 1.0, smoothstep(1.1, 2.2, seam));
         totalEmissiveRadiance *= smoothstep(0.15, 0.7, uSolid);`,
       )
   }
