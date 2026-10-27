@@ -1,6 +1,6 @@
 # handoff_hero_v1 — baked-lighting hero (igloo v16 + terrain v12)
 
-Drop the contents into `public/models/hero/`. The site uses this folder as the default hero. `?baked=0` keeps the realtime igloo and terrain. `hero.json` maps every file and holds the intensities. The page frames this camera at about 68 mm, slightly left of centre, because 78 mm overfills.
+Drop the contents into `public/models/hero/`. The site uses this folder as the default hero. `?baked=0` keeps the realtime igloo and terrain. `hero.json` maps every file and holds the intensities. The page frames this camera at about 59 mm, centred. 78 mm overfills, and 68 mm sat too close and too far left.
 
 ## Files
 | file | what | UV | colour space | encoding |

@@ -39,7 +39,7 @@ import {
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { describeBaked, startBakedPlan } from './baked'
 import { brand, type ScreenId } from './brand'
-import { createFigure } from './figure'
+import { createFigure, type Figure } from './figure'
 import { FrostEffect } from './frost'
 import { bindHeroProgress } from './heroModel'
 import { loadIgloo, makeLabelSlots, type Igloo, type LabelAnchor } from './igloo'
@@ -47,7 +47,7 @@ import { clamp, lerp, smoother } from './math'
 import { createMeteor, meteorCenter, type Meteor } from './meteor'
 import type { Overlay, ProjectedLabel } from './overlay'
 import { detectQuality, reducedMotion } from './quality'
-import { createRings } from './rings'
+import { createRings, type Rings } from './rings'
 import { Ambience } from './sound'
 import { WarpEffect } from './warp'
 import { createWorld } from './world'
@@ -145,7 +145,14 @@ export async function startExperience(overlay: Overlay) {
     bakedPlan?.igloo ?? null,
     bakedPlan?.iglooModel ?? null,
   )
-  const world = createWorld(scene, quality, renderer, bakedPlan?.terrain ?? Promise.resolve(null), bakedPlan?.terrainModel ?? Promise.resolve(null))
+  const world = createWorld(
+    scene,
+    quality,
+    renderer,
+    bakedPlan?.terrain ?? Promise.resolve(null),
+    bakedPlan?.terrainModel ?? Promise.resolve(null),
+    bakedOn,
+  )
   scene.environment = createEnvironment(renderer)
   scene.environmentIntensity = 0.35
   addLights(scene, quality.shadows)
@@ -293,16 +300,29 @@ export async function startExperience(overlay: Overlay) {
   let shotLocks = shot == null ? 0 : 90
 
   let figureGroup: Object3D | null = null
-  const [meteor, rings, figure] = await Promise.all([
-    createMeteor(quality, renderer),
-    createRings(quality, renderer),
-    createFigure(quality),
-  ])
-  scene.add(meteor.group, rings.group, figure.group)
-  figureGroup = figure.group
-  meteor.group.visible = false
-  rings.group.visible = false
-  figure.group.visible = false
+  let meteor: Meteor | null = null
+  let rings: Rings | null = null
+  let figure: Figure | null = null
+  let meteorSlots: LabelAnchor[] = []
+  let scenesStarted = false
+  // Crystal, rings, and the fox are off the first screen. They start once the hero is up.
+  const startScenes = () => {
+    if (scenesStarted) return
+    scenesStarted = true
+    void Promise.all([createMeteor(quality, renderer), createRings(quality, renderer), createFigure(quality)]).then(
+      ([nextMeteor, nextRings, nextFigure]) => {
+        meteor = nextMeteor
+        rings = nextRings
+        figure = nextFigure
+        figureGroup = nextFigure.group
+        meteorSlots = makeLabelSlots(nextMeteor.labelCount)
+        scene.add(nextMeteor.group, nextRings.group, nextFigure.group)
+        nextMeteor.group.visible = false
+        nextRings.group.visible = false
+        nextFigure.group.visible = false
+      },
+    )
+  }
 
   const pos = new Vector3()
   const target = new Vector3()
@@ -342,7 +362,6 @@ export async function startExperience(overlay: Overlay) {
   let igloo: Igloo | null = null
   const gapState: GapState = { frames: 0, target: null, white: null, black: null, pixels: null, mask: null, pending: null }
   let slots: LabelAnchor[] = []
-  const meteorSlots: LabelAnchor[] = makeLabelSlots(meteor.labelCount)
   let ready = false
   let revealed = false
   let samples = 0
@@ -355,6 +374,8 @@ export async function startExperience(overlay: Overlay) {
   const reveal = () => {
     if (revealed) return
     revealed = true
+    bakedPlan?.release()
+    startScenes()
     overlay.hideLoader()
     overlay.revealChrome()
     overlay.setActive(screen)
@@ -430,7 +451,15 @@ export async function startExperience(overlay: Overlay) {
         crystalSlow = 0
         setDpr(fieldDpr)
       }
-      world.update(now / 1000, phase.mood, wire, phase.screen === 'field', phase.screen === 'rings', phase.screen === 'figure')
+      world.update(
+        now / 1000,
+        phase.mood,
+        wire,
+        phase.screen === 'field',
+        phase.screen === 'rings',
+        phase.screen === 'figure',
+        phase.burst,
+      )
       clear.copy(world.fog.color)
       renderer.setClearColor(clear, 1)
       scene.environmentIntensity =
@@ -446,10 +475,10 @@ export async function startExperience(overlay: Overlay) {
       if (normalPass) normalPass.enabled = !heroSharp
       if (ssaoPass) ssaoPass.enabled = !heroSharp
       igloo?.update(phase.burst, phase.solid, phase.dissolve, reducedMotion ? 0 : now / 1000)
-      meteor.update(phase.meteorReveal, reducedMotion ? 0 : now / 1000)
+      meteor?.update(phase.meteorReveal, reducedMotion ? 0 : now / 1000)
       const clock = reducedMotion ? 0 : now / 1000
-      rings.update(phase.ringsT, phase.ringsShown)
-      figure.update(phase.figureAppear, phase.figureBlow, clock, dpr)
+      rings?.update(phase.ringsT, phase.ringsShown)
+      figure?.update(phase.figureAppear, phase.figureBlow, clock, dpr)
 
       applyCamera(phase, pos, target, up, camera, clock, bakedOn)
       dof.target = phase.screen === 'field' ? focusPoint : target
@@ -671,7 +700,7 @@ function applyCamera(
   let fov = 40
   if (phase.screen === 'field' || (phase.screen === 'rift' && phase.riftT < 0.02)) {
     // Wire and solid share this pose, so the lines dissolve into the ice in place.
-    // The baked hero sits at 68 mm, slightly left. Burst eases back to the wide eye so the bricks stay in frame.
+    // The baked hero is 59 mm and centred. The burst holds the wide eye outside the bricks.
     fov = placeFieldEye(pos, target, aspect, phase.burst, bakedHero)
     up.set(0, 1, 0)
   } else if (phase.screen === 'rift') {
@@ -865,8 +894,10 @@ function lensVerticalFov(focalMm: number, aspect: number) {
   return (vertical * 180) / Math.PI
 }
 
-const HERO_EYE: readonly [number, number, number] = [-11.2, 2.2, -9.8]
-const HERO_LOOK: readonly [number, number, number] = [0, 0.8, 0]
+const HERO_EYE: readonly [number, number, number] = [-11.2, 1.65, -9.8]
+const HERO_LOOK: readonly [number, number, number] = [0, 0.72, 0]
+const HERO_LENS = 59
+const BURST_PIVOT: readonly [number, number, number] = [0, 0.9, 0]
 
 function placeFieldEye(pos: Vector3, target: Vector3, aspect: number, burst: number, baked: boolean) {
   const span = clamp(burst, 0, 1)
@@ -883,18 +914,53 @@ function placeFieldEye(pos: Vector3, target: Vector3, aspect: number, burst: num
     if (aspect >= 1) aimSubjectRight(target, pos, 0.16, aspect, fov)
     return fov
   }
-  const heroFov = lensVerticalFov(68, aspect)
+  const heroFov = lensVerticalFov(HERO_LENS, aspect)
   poseA.set(HERO_EYE[0], HERO_EYE[1], HERO_EYE[2])
   poseB.set(HERO_LOOK[0], HERO_LOOK[1], HERO_LOOK[2])
-  aimSubjectRight(poseB, poseA, -0.07, aspect, heroFov)
   const wideFov = 40
   poseC.set(EYE_TARGET[0], EYE_TARGET[1], EYE_TARGET[2])
   const dEye = desktopEyeDistance(5.05, 3.2, aspect, wideFov) * 0.72
   placeAlong(poseD, EYE_TARGET, EYE_DIR, dEye)
   aimSubjectRight(poseC, poseD, 0.16, aspect, wideFov)
-  pos.lerpVectors(poseA, poseD, span)
-  target.lerpVectors(poseB, poseC, span)
-  return lerp(heroFov, wideFov, span)
+  // The straight line between these eyes passes through the dome. Orbit outside it,
+  // and be on the wide eye for the whole separation (burst is already ~0.26 by scroll 0.29).
+  const glide = span <= 0 ? 0 : Math.min(1, span / 0.08)
+  orbitOutside(pos, poseA, poseD, glide)
+  target.lerpVectors(poseB, poseC, glide)
+  return lerp(heroFov, wideFov, glide)
+}
+
+/** Keep the eye on an arc around the igloo. Radius never enters the brick cloud. */
+function orbitOutside(out: Vector3, from: Vector3, to: Vector3, t: number) {
+  const ax = from.x - BURST_PIVOT[0]
+  const ay = from.y - BURST_PIVOT[1]
+  const az = from.z - BURST_PIVOT[2]
+  const bx = to.x - BURST_PIVOT[0]
+  const by = to.y - BURST_PIVOT[1]
+  const bz = to.z - BURST_PIVOT[2]
+  const al = Math.hypot(ax, ay, az) || 1
+  const bl = Math.hypot(bx, by, bz) || 1
+  const dx = ax / al
+  const dy = ay / al
+  const dz = az / al
+  const ex = bx / bl
+  const ey = by / bl
+  const ez = bz / bl
+  const dot = Math.min(1, Math.max(-1, dx * ex + dy * ey + dz * ez))
+  const theta = Math.acos(dot)
+  let rx = dx
+  let ry = dy
+  let rz = dz
+  if (theta >= 0.001) {
+    const s = Math.sin(theta)
+    const w1 = Math.sin((1 - t) * theta) / s
+    const w2 = Math.sin(t * theta) / s
+    rx = dx * w1 + ex * w2
+    ry = dy * w1 + ey * w2
+    rz = dz * w1 + ez * w2
+  }
+  const radius = Math.max(6.8, al + (bl - al) * t)
+  out.set(BURST_PIVOT[0] + rx * radius, BURST_PIVOT[1] + ry * radius, BURST_PIVOT[2] + rz * radius)
 }
 
 function desktopEyeDistance(width: number, height: number, aspect: number, fovDeg: number) {
@@ -1026,12 +1092,12 @@ function applyGrade(
   warp.setWarp(phase.ripple, phase.blur, phase.glitch, phase.white, phase.riftT + phase.figureT, aspect)
 }
 
-function activeAnchors(phase: Phase, igloo: Igloo | null, slots: LabelAnchor[], meteor: Meteor, meteorSlots: LabelAnchor[]) {
+function activeAnchors(phase: Phase, igloo: Igloo | null, slots: LabelAnchor[], meteor: Meteor | null, meteorSlots: LabelAnchor[]) {
   if ((phase.screen === 'field' || phase.screen === 'rift') && igloo) {
     igloo.fillLabels(slots)
     return slots
   }
-  if (phase.screen === 'meteor') {
+  if (phase.screen === 'meteor' && meteor) {
     meteor.fillLabels(meteorSlots)
     return meteorSlots
   }

@@ -44,18 +44,24 @@ function ktx2Loader(renderer: WebGLRenderer) {
   return basisLoader
 }
 
-/** One external KTX2. A missing file returns null so a handoff can arrive later. */
-export async function loadKtx2(url: string, renderer: WebGLRenderer): Promise<Texture | null> {
+const ktx2Loads = new Map<string, Promise<Texture | null>>()
+
+/**
+ * One GET per KTX2. A HEAD probe in front of the body was a second request,
+ * and the first of the pair was aborted. A missing file returns null.
+ */
+export function loadKtx2(url: string, renderer: WebGLRenderer): Promise<Texture | null> {
   const resolved = publicUrl(url)
-  try {
-    const head = await fetch(resolved, { method: 'HEAD' })
-    const type = head.headers.get('content-type') ?? ''
-    if (!head.ok || type.includes('text/html')) return null
-    return await ktx2Loader(renderer).loadAsync(resolved)
-  } catch (error) {
-    console.warn(`KTX2 ${url} failed to load`, error)
-    return null
-  }
+  const pending = ktx2Loads.get(resolved)
+  if (pending) return pending
+  const load = ktx2Loader(renderer)
+    .loadAsync(resolved)
+    .catch((error: unknown) => {
+      console.warn(`KTX2 ${url} failed to load`, error)
+      return null
+    })
+  ktx2Loads.set(resolved, load)
+  return load
 }
 
 /** Asset URL that follows Vite's base, including `./` for a folder-relative build. */

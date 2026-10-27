@@ -48,6 +48,8 @@ export type BakedSlot = {
   aoIntensity: number
   emissive: [number, number, number] | null
   emissiveIntensity: number | null
+  /** AO, seam, and albedo. The lightmap is enough for the first frame. */
+  rest: Promise<void>
 }
 
 export type BakedHandoff = {
@@ -91,6 +93,7 @@ export function emptyBakedSlot(): BakedSlot {
     aoIntensity: 1,
     emissive: null,
     emissiveIntensity: null,
+    rest: Promise.resolve(),
   }
 }
 
@@ -112,8 +115,10 @@ export function describeBaked(handoff: BakedHandoff | null) {
 }
 
 /**
- * The lightmap already holds the sun, sky and GI. Drop the live lights so
- * they are not added again. The emissive seam is a separate term.
+ * The lightmap already holds the sun, sky and GI. While the bricks are
+ * assembled, drop the live lights. As uBurst rises, crossfade to those
+ * lights and drop the lightmap, so contact darkening does not travel
+ * with a brick that has left its neighbour. Callers declare uBurst.
  */
 export function bakeLightShader(fragment: string) {
   return fragment
@@ -122,14 +127,27 @@ export function bakeLightShader(fragment: string) {
       `#if defined( RE_IndirectDiffuse )
         irradiance = vec3(0.0);
       #endif
-      #include <lights_fragment_maps>`,
+      #include <lights_fragment_maps>
+      #if defined( RE_IndirectDiffuse )
+        float bakeLive = smoothstep(0.0, 0.18, uBurst);
+        irradiance *= mix(0.88, 1.0, bakeLive);
+      #endif`,
+    )
+    .replace(
+      '#include <aomap_fragment>',
+      `#include <aomap_fragment>
+      #ifdef USE_AOMAP
+        float bakeAo = smoothstep(0.0, 0.18, uBurst);
+        reflectedLight.indirectDiffuse *= mix(1.0, 1.0 / max(ambientOcclusion, 0.04), bakeAo);
+      #endif`,
     )
     .replace(
       '#include <lights_fragment_end>',
       `#include <lights_fragment_end>
-      reflectedLight.directDiffuse *= 0.0;
-      reflectedLight.directSpecular *= 0.0;
-      reflectedLight.indirectSpecular *= 0.0;`,
+      float bakeDirect = smoothstep(0.0, 0.18, uBurst);
+      reflectedLight.directDiffuse *= bakeDirect;
+      reflectedLight.directSpecular *= bakeDirect;
+      reflectedLight.indirectSpecular *= bakeDirect;`,
     )
 }
 
@@ -170,6 +188,8 @@ export type BakedPlan = {
   terrain: Promise<BakedSlot>
   iglooModel: Promise<string | null>
   terrainModel: Promise<string | null>
+  /** Starts the ground, the secondary igloo maps, and anything else waiting on first paint. */
+  release: () => void
 }
 
 /**
@@ -177,12 +197,19 @@ export type BakedPlan = {
  * alongside the maps. A missing handoff leaves the realtime materials.
  */
 export function startBakedPlan(renderer: WebGLRenderer): BakedPlan {
+  let release = () => {}
+  const released = new Promise<void>((resolve) => {
+    release = resolve
+  })
   const manifestP = readManifest()
   const iglooEntry = manifestP.then((manifest) => (manifest ? (manifest.igloo ?? {}) : DEFAULT_IGLOO))
   const terrainEntry = manifestP.then((manifest) => (manifest ? (manifest.terrain ?? {}) : DEFAULT_TERRAIN))
-  const igloo = iglooEntry.then((entry) => loadSlot(entry, renderer))
-  const terrain = terrainEntry.then((entry) => loadSlot(entry, renderer))
-  const ready = Promise.all([igloo, terrain]).then(([iglooSlot, terrainSlot]) => {
+  // The igloo lightmap shares the first paint with the glb. Ground files and the
+  // extra igloo maps wait until the hero is on screen, so they are not fetched twice
+  // and they do not sit in front of that download.
+  const igloo = iglooEntry.then((entry) => loadSlot(entry, renderer, { restGate: released, block: false }))
+  const terrain = released.then(() => terrainEntry).then((entry) => loadSlot(entry, renderer, { block: true }))
+  const ready = Promise.all([igloo.then((slot) => slot.rest.then(() => slot)), terrain]).then(([iglooSlot, terrainSlot]) => {
     const handoff = { igloo: iglooSlot, terrain: terrainSlot, ready: slotReady(iglooSlot) || slotReady(terrainSlot) }
     if (!handoff.ready) {
       console.info('[baked] handoff_hero_v1 is not in /models/hero yet. Realtime hero stays.')
@@ -196,7 +223,8 @@ export function startBakedPlan(renderer: WebGLRenderer): BakedPlan {
     igloo,
     terrain,
     iglooModel: iglooEntry.then((entry) => namedModel(entry)),
-    terrainModel: terrainEntry.then((entry) => namedModel(entry)),
+    terrainModel: released.then(() => terrainEntry).then((entry) => namedModel(entry)),
+    release,
   }
 }
 
@@ -222,7 +250,11 @@ async function readManifest(): Promise<{ igloo?: ManifestEntry; terrain?: Manife
   }
 }
 
-async function loadSlot(entry: ManifestEntry, renderer: WebGLRenderer): Promise<BakedSlot> {
+async function loadSlot(
+  entry: ManifestEntry,
+  renderer: WebGLRenderer,
+  options: { restGate?: Promise<void>; block?: boolean } = {},
+): Promise<BakedSlot> {
   const slot = emptyBakedSlot()
   slot.lightIntensity = numberOr(entry.lightMapIntensity ?? entry.lightIntensity, 1)
   slot.aoIntensity = numberOr(entry.aoMapIntensity ?? entry.aoIntensity, 1)
@@ -230,20 +262,23 @@ async function loadSlot(entry: ManifestEntry, renderer: WebGLRenderer): Promise<
   slot.emissiveIntensity = entry.emissiveIntensity == null ? null : numberOr(entry.emissiveIntensity, 2.8)
   const model = fileOf(entry.glb ?? entry.model)
   slot.model = model ? heroFile(model) : null
-  const [light, ao, seam, albedo] = await Promise.all([
-    loadMap(entry.lightMap ?? entry.light, renderer),
-    loadMap(entry.aoMap ?? entry.ao, renderer),
-    loadMap(entry.seamMask ?? entry.seam, renderer),
-    loadMap(entry.albedo, renderer),
-  ])
-  slot.light = light
-  slot.ao = ao
-  slot.seam = seam
-  slot.albedo = albedo
+  const lightP = loadMap(entry.lightMap ?? entry.light, renderer)
+  slot.rest = (options.restGate ?? Promise.resolve()).then(async () => {
+    const [ao, seam, albedo] = await Promise.all([
+      loadMap(entry.aoMap ?? entry.ao, renderer),
+      loadMap(entry.seamMask ?? entry.seam, renderer),
+      loadMap(entry.albedo, renderer),
+    ])
+    slot.ao = ao
+    slot.seam = seam
+    slot.albedo = albedo
+    applyChannel(slot.ao, entry.aoMapChannel ?? entry.aoChannel, 1)
+    applyChannel(slot.seam, entry.seamChannel, 0)
+    applyChannel(slot.albedo, entry.albedoChannel, 0)
+  })
+  slot.light = await lightP
   applyChannel(slot.light, entry.lightMapChannel ?? entry.lightChannel, 1)
-  applyChannel(slot.ao, entry.aoMapChannel ?? entry.aoChannel, 1)
-  applyChannel(slot.seam, entry.seamChannel, 0)
-  applyChannel(slot.albedo, entry.albedoChannel, 0)
+  if (options.block !== false) await slot.rest
   return slot
 }
 

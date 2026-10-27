@@ -34,7 +34,7 @@ export function sampleHeight(_x: number, _z: number) {
 
 export type World = {
   fog: FogExp2
-  update: (time: number, mood: number, wire?: number, field?: boolean, mist?: boolean, hideMound?: boolean) => void
+  update: (time: number, mood: number, wire?: number, field?: boolean, mist?: boolean, hideMound?: boolean, burst?: number) => void
   adoptGround: (object: Object3D | null) => void
 }
 
@@ -44,6 +44,7 @@ export function createWorld(
   renderer: WebGLRenderer,
   bakedTerrain: Promise<BakedSlot | null> = Promise.resolve(null),
   terrainModel: Promise<string | null> = Promise.resolve(null),
+  bakedHero = false,
 ): World {
   const fog = new FogExp2(HAZE.clone(), 0.0014)
   scene.fog = fog
@@ -53,6 +54,8 @@ export function createWorld(
 
   const ranges = new Group()
   ranges.name = 'ranges'
+  // The ring was framed from the old +Z eye. Swing that same ridge behind the baked hero.
+  if (bakedHero) ranges.rotation.y = 3.73
   scene.add(ranges)
 
   const terrainRoot = new Group()
@@ -60,6 +63,8 @@ export function createWorld(
   scene.add(terrainRoot)
 
   const terrainMeshes: Mesh[] = []
+  let groundBurst: Array<{ value: number }> = []
+  let terrainSerial = 0
   const raycaster = new Raycaster()
   const rayOrigin = new Vector3(0, 80, 0)
   const rayDown = new Vector3(0, -1, 0)
@@ -77,15 +82,11 @@ export function createWorld(
     ranges.add(hero)
   })
 
-  void terrainModel
-    .then((model) => {
-      const heroP = model
-        ? loadHero(model, renderer, { eager: true }).then((override) => override ?? loadHero('/models/terrain.glb', renderer, { eager: true }))
-        : loadHero('/models/terrain.glb', renderer, { eager: true })
-      return Promise.all([heroP, bakedTerrain])
-    })
-    .then(([hero, baked]) => {
-    if (!hero) return
+  const mountTerrain = (hero: Group, baked: BakedSlot | null) => {
+    const serial = ++terrainSerial
+    for (const child of [...terrainRoot.children]) child.removeFromParent()
+    terrainMeshes.length = 0
+    groundBurst = []
     hero.name = 'terrain-mesh'
     let missingUv = false
     hero.traverse((object) => {
@@ -98,14 +99,31 @@ export function createWorld(
         missingUv = true
         console.warn('[baked] terrain lightmap expects UV2 (glTF TEXCOORD_1). This mesh has no uv1.')
       }
-      for (const entry of materialsOf(mesh)) gradeSurface(entry, 'terrain', renderer, skirt ? null : baked)
+      for (const entry of materialsOf(mesh)) gradeSurface(entry, 'terrain', renderer, skirt ? null : baked, groundBurst)
       terrainMeshes.push(mesh)
     })
+    if (serial !== terrainSerial) return
     terrainRoot.add(hero)
     raycaster.set(rayOrigin, rayDown)
     raycaster.far = 200
     const hit = raycaster.intersectObjects(terrainMeshes, false)[0]
     if (hit) groundY = hit.point.y
+  }
+
+  // The small realtime ground holds the first frame. The hero terrain and its
+  // lightmap start after the igloo is on screen.
+  void loadHero('/models/terrain.glb', renderer, { eager: true }).then((hero) => {
+    if (!hero || terrainSerial > 0) return
+    mountTerrain(hero, null)
+  })
+  void terrainModel.then(async (model) => {
+    if (!model) return
+    const [hero, baked] = await Promise.all([
+      loadHero(model, renderer, { eager: true }),
+      bakedTerrain,
+    ])
+    if (!hero) return
+    mountTerrain(hero, baked)
   })
 
   const snow = buildSnow(quality.snow)
@@ -120,9 +138,12 @@ export function createWorld(
       object.position.y += groundY + 0.06 - box.min.y
       seated = true
     },
-    update(time, mood, wire = 0, field = true, mist = false, hideMound = false) {
+    update(time, mood, wire = 0, field = true, mist = false, hideMound = false, burst = 0) {
+      for (const slot of groundBurst) slot.value = burst
       fog.color.copy(mist ? MIST : HAZE)
-      fog.density = mist ? 0.011 : fogDensity(mood)
+      // The baked eye looks through the far ring. 0.016 hid that ridge in flat fog.
+      const heroHaze = bakedHero && field && !mist
+      fog.density = mist ? 0.011 : heroHaze ? 0.0055 : fogDensity(mood)
       skyMat.uniforms.uMood!.value = mood
       skyMat.uniforms.uWire!.value = wire
       skyMat.uniforms.uMist!.value = mist ? 1 : 0
@@ -157,6 +178,7 @@ function gradeSurface(
   kind: 'terrain' | 'range',
   renderer?: WebGLRenderer,
   baked: BakedSlot | null = null,
+  burstUniforms?: Array<{ value: number }>,
 ) {
   if (Array.isArray(entry) || !(entry instanceof MeshStandardMaterial)) return
   entry.fog = true
@@ -173,10 +195,19 @@ function gradeSurface(
   const lit = kind === 'terrain' && bakedLights(baked)
   const curve = lit ? '1.0' : kind === 'terrain' ? '1.02' : '0.96'
   const gain = kind === 'terrain' ? '1.0' : '1.04'
+  const burst = lit ? { value: 0 } : null
+  if (burst && burstUniforms) burstUniforms.push(burst)
   entry.onBeforeCompile = (shader, renderer) => {
     prior.call(entry, shader, renderer)
+    if (burst) shader.uniforms.uBurst = burst
     let fragment = shader.fragmentShader
-    if (lit) fragment = bakeLightShader(fragment)
+    if (lit) {
+      fragment = bakeLightShader(fragment).replace(
+        '#include <common>',
+        `#include <common>
+        uniform float uBurst;`,
+      )
+    }
     fragment = fragment
       .replace(
         '#include <fog_fragment>',
@@ -209,7 +240,7 @@ function gradeSurface(
     }
   }
   const bakedKey = lit ? '-baked' : ''
-  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v13${bakedKey}`
+  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v14${bakedKey}`
 }
 
 function buildSky() {

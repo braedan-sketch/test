@@ -167,6 +167,8 @@ export async function loadIgloo(
   })
   capBrickVolumes(fitted)
   group.add(grid.lines)
+  const snowMat = shared.get('snow')
+  if (slot && snowMat) void slot.rest.then(() => assignBakedMaps(snowMat, slot, renderer))
 
   if (blocks.length === 0) throw new Error('igloo.glb has no blocks')
 
@@ -352,19 +354,10 @@ function dressSnow(
     shader.uniforms.uBurst = uniforms.uBurst
     if (lit) shader.fragmentShader = bakeLightShader(shader.fragmentShader)
     const seam = lit
-      ? `#ifdef USE_EMISSIVEMAP
-          vec2 seamDx = dFdx(vEmissiveMapUv) * 0.55;
-          vec2 seamDy = dFdy(vEmissiveMapUv) * 0.55;
-          vec3 seamWide = totalEmissiveRadiance;
-          seamWide = max(seamWide, emissive * texture2D(emissiveMap, vEmissiveMapUv + seamDx).rgb);
-          seamWide = max(seamWide, emissive * texture2D(emissiveMap, vEmissiveMapUv - seamDx).rgb);
-          seamWide = max(seamWide, emissive * texture2D(emissiveMap, vEmissiveMapUv + seamDy).rgb);
-          seamWide = max(seamWide, emissive * texture2D(emissiveMap, vEmissiveMapUv - seamDy).rgb);
-          totalEmissiveRadiance = seamWide;
-        #endif
-        float seam = max(totalEmissiveRadiance.r, max(totalEmissiveRadiance.g, totalEmissiveRadiance.b));
-        float core = smoothstep(0.55, 0.9, seam);
-        totalEmissiveRadiance *= mix(0.12, 1.0, core);
+      ? `float seam = max(totalEmissiveRadiance.r, max(totalEmissiveRadiance.g, totalEmissiveRadiance.b));
+        float seamW = max(fwidth(seam), 0.004);
+        float core = smoothstep(0.9, 0.9 + seamW, seam);
+        totalEmissiveRadiance = vec3(0.93, 0.96, 1.0) * core * 6.5;
         totalEmissiveRadiance *= 1.0 - smoothstep(0.0, 0.28, uBurst);
         totalEmissiveRadiance *= smoothstep(0.15, 0.7, uSolid);`
       : `#ifdef USE_EMISSIVEMAP
@@ -393,7 +386,7 @@ function dressSnow(
       )
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${seam}`)
   }
-  entry.customProgramCacheKey = () => `${priorKey()}${lit ? '-igloo-v17-baked' : '-igloo-v16'}`
+  entry.customProgramCacheKey = () => `${priorKey()}${lit ? '-igloo-v18-baked' : '-igloo-v16'}`
   solidUniforms.push(uniforms.uSolid)
   burstUniforms.push(uniforms.uBurst)
   shared.set('snow', entry)
