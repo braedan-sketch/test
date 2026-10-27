@@ -1,0 +1,81 @@
+{
+ "version": "hero_bake_v1",
+ "colorSpace": {
+  "albedo": "srgb",
+  "lightMap": "srgb",
+  "seamMask": "srgb",
+  "aoMap": "linear",
+  "normalMap": "linear"
+ },
+ "uv": {
+  "TEXCOORD_0": "material maps (albedo, normal, roughness, seam mask)",
+  "TEXCOORD_1": "lightmap + AO atlas (three.js channel 1)"
+ },
+ "igloo": {
+  "glb": "igloo.glb",
+  "lightMap": "igloo_lightmap.ktx2",
+  "aoMap": "igloo_ao.ktx2",
+  "seamMask": "igloo_seam_mask.ktx2",
+  "albedo": "igloo_albedo.ktx2",
+  "lightMapChannel": 1,
+  "aoMapChannel": 1,
+  "lightMapIntensity": 55.832,
+  "lightMapMax": 17.7718,
+  "aoMapIntensity": 0.25,
+  "emissive": [
+   0.93,
+   0.96,
+   1.0
+  ],
+  "emissiveIntensity": 2.8,
+  "bricks": 40,
+  "brickNodePrefix": "igloo_brick_",
+  "brickExtras": [
+   "row",
+   "t",
+   "kind",
+   "bidx"
+  ],
+  "brickTransform": "translation-only"
+ },
+ "terrain": {
+  "glb": "terrain.glb",
+  "lightMap": "ground_lightmap.ktx2",
+  "aoMap": "ground_ao.ktx2",
+  "lightMapChannel": 1,
+  "aoMapChannel": 1,
+  "lightMapIntensity": 38.625,
+  "lightMapMax": 12.2947,
+  "aoMapIntensity": 0.25,
+  "meshes": {
+   "GROUND": "baked (lightmap on UV1)",
+   "SKIRT": "not lightmapped, keep realtime material"
+  }
+ },
+ "mountains": "not included - keep existing public/models/mountains.glb",
+ "camera": {
+  "position": [
+   -11.2,
+   9.8,
+   2.2
+  ],
+  "target": [
+   0,
+   0,
+   0.8
+  ],
+  "lensMM": 78,
+  "sensorMM": 36,
+  "blenderZUp": true,
+  "threeYUp_position": [
+   -11.2,
+   2.2,
+   -9.8
+  ],
+  "threeYUp_target": [
+   0,
+   0.8,
+   0
+  ]
+ }
+}
