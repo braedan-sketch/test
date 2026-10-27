@@ -894,7 +894,7 @@ function lensVerticalFov(focalMm: number, aspect: number) {
   return (vertical * 180) / Math.PI
 }
 
-const HERO_EYE: readonly [number, number, number] = [-11.2, 1.65, -9.8]
+const HERO_EYE: readonly [number, number, number] = [-12.1, 1.72, -10.58]
 const HERO_LOOK: readonly [number, number, number] = [0, 0.72, 0]
 const HERO_LENS = 59
 const BURST_PIVOT: readonly [number, number, number] = [0, 0.9, 0]
@@ -917,6 +917,7 @@ function placeFieldEye(pos: Vector3, target: Vector3, aspect: number, burst: num
   const heroFov = lensVerticalFov(HERO_LENS, aspect)
   poseA.set(HERO_EYE[0], HERO_EYE[1], HERO_EYE[2])
   poseB.set(HERO_LOOK[0], HERO_LOOK[1], HERO_LOOK[2])
+  aimSubjectRight(poseB, poseA, 0.03, aspect, heroFov)
   const wideFov = 40
   poseC.set(EYE_TARGET[0], EYE_TARGET[1], EYE_TARGET[2])
   const dEye = desktopEyeDistance(5.05, 3.2, aspect, wideFov) * 0.72

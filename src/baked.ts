@@ -130,7 +130,7 @@ export function bakeLightShader(fragment: string) {
       #include <lights_fragment_maps>
       #if defined( RE_IndirectDiffuse )
         float bakeLive = smoothstep(0.0, 0.18, uBurst);
-        irradiance *= mix(0.88, 1.0, bakeLive);
+        irradiance *= mix(1.0, 0.0, bakeLive);
       #endif`,
     )
     .replace(
@@ -138,15 +138,15 @@ export function bakeLightShader(fragment: string) {
       `#include <aomap_fragment>
       #ifdef USE_AOMAP
         float bakeAo = smoothstep(0.0, 0.18, uBurst);
-        reflectedLight.indirectDiffuse *= mix(1.0, 1.0 / max(ambientOcclusion, 0.04), bakeAo);
+        reflectedLight.indirectDiffuse *= mix(1.0, 1.0 / max(ambientOcclusion, 0.04), clamp(bakeAo + 0.4, 0.0, 1.0));
       #endif`,
     )
     .replace(
       '#include <lights_fragment_end>',
       `#include <lights_fragment_end>
       float bakeDirect = smoothstep(0.0, 0.18, uBurst);
-      reflectedLight.directDiffuse *= bakeDirect;
-      reflectedLight.directSpecular *= bakeDirect;
+      reflectedLight.directDiffuse *= bakeDirect * 0.22;
+      reflectedLight.directSpecular *= bakeDirect * 0.22;
       reflectedLight.indirectSpecular *= bakeDirect;`,
     )
 }

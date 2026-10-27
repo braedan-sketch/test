@@ -354,10 +354,14 @@ function dressSnow(
     shader.uniforms.uBurst = uniforms.uBurst
     if (lit) shader.fragmentShader = bakeLightShader(shader.fragmentShader)
     const seam = lit
-      ? `float seam = max(totalEmissiveRadiance.r, max(totalEmissiveRadiance.g, totalEmissiveRadiance.b));
-        float seamW = max(fwidth(seam), 0.004);
-        float core = smoothstep(0.9, 0.9 + seamW, seam);
-        totalEmissiveRadiance = vec3(0.93, 0.96, 1.0) * core * 6.5;
+      ? `#ifdef USE_EMISSIVEMAP
+          float mask = texture2D(emissiveMap, vEmissiveMapUv).r;
+          float seamW = max(fwidth(mask), 0.003);
+          float line = 1.0 - smoothstep(0.0, seamW * 2.05, abs(mask - 0.78));
+          totalEmissiveRadiance = vec3(0.93, 0.96, 1.0) * line * 4.8;
+        #else
+          totalEmissiveRadiance = vec3(0.0);
+        #endif
         totalEmissiveRadiance *= 1.0 - smoothstep(0.0, 0.28, uBurst);
         totalEmissiveRadiance *= smoothstep(0.15, 0.7, uSolid);`
       : `#ifdef USE_EMISSIVEMAP
@@ -386,7 +390,7 @@ function dressSnow(
       )
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${seam}`)
   }
-  entry.customProgramCacheKey = () => `${priorKey()}${lit ? '-igloo-v18-baked' : '-igloo-v16'}`
+  entry.customProgramCacheKey = () => `${priorKey()}${lit ? '-igloo-v21-baked' : '-igloo-v16'}`
   solidUniforms.push(uniforms.uSolid)
   burstUniforms.push(uniforms.uBurst)
   shared.set('snow', entry)

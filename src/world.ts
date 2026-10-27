@@ -143,7 +143,7 @@ export function createWorld(
       fog.color.copy(mist ? MIST : HAZE)
       // The baked eye looks through the far ring. 0.016 hid that ridge in flat fog.
       const heroHaze = bakedHero && field && !mist
-      fog.density = mist ? 0.011 : heroHaze ? 0.0055 : fogDensity(mood)
+      fog.density = mist ? 0.011 : heroHaze ? 0.0014 : fogDensity(mood)
       skyMat.uniforms.uMood!.value = mood
       skyMat.uniforms.uWire!.value = wire
       skyMat.uniforms.uMist!.value = mist ? 1 : 0
@@ -240,7 +240,7 @@ function gradeSurface(
     }
   }
   const bakedKey = lit ? '-baked' : ''
-  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v14${bakedKey}`
+  entry.customProgramCacheKey = () => `${priorKey()}-${kind}-v16${bakedKey}`
 }
 
 function buildSky() {
