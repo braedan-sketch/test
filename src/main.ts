@@ -1,12 +1,9 @@
 import 'lenis/dist/lenis.css'
-import './style.css'
-import { brand } from './brand'
-import { startExperience } from './experience'
-import { mountOverlay } from './overlay'
+import './scrub.css'
+import { startScrub } from './scrub'
 
-const overlay = mountOverlay()
-
-startExperience(overlay).catch((error: unknown) => {
+startScrub().catch((error: unknown) => {
   console.error(error)
-  overlay.fail(brand.loader.error)
+  const loader = document.querySelector('#loader')
+  if (loader) loader.textContent = 'The reel failed to load.'
 })
