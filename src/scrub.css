@@ -1,0 +1,206 @@
+:root {
+  --fog: #c5ced4;
+  --ink: #172024;
+  --ink-dim: rgba(23, 32, 36, 0.62);
+  --mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --display: 'Big Shoulders Display', 'Arial Narrow', Impact, sans-serif;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--fog);
+  color: var(--ink);
+}
+
+body {
+  font-family: var(--mono);
+}
+
+#poster,
+#stage,
+#stage video {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+#poster,
+#stage video {
+  object-fit: cover;
+  background: var(--fog);
+}
+
+#stage { z-index: 1; pointer-events: none; }
+
+/* The idle clip stays transparent, not visibility:hidden. WebKit will not
+   finish a seek or deliver a frame callback for a visibility:hidden video,
+   which left the reel on frame 0. */
+#stage video {
+  opacity: 0;
+  pointer-events: none;
+  transition: none;
+}
+
+#stage video.is-live {
+  opacity: 1;
+}
+
+#poster {
+  z-index: 2;
+  transition: opacity 0.4s ease;
+}
+
+#poster.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#chrome,
+#copy,
+#hint,
+#bar,
+#loader {
+  position: fixed;
+  z-index: 3;
+  pointer-events: none;
+}
+
+#chrome {
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: max(22px, env(safe-area-inset-top)) 28px 0;
+}
+
+.wordmark,
+#readout,
+.kicker,
+#hint,
+#loader {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+#readout { color: var(--ink-dim); text-align: right; }
+
+#copy {
+  left: 28px;
+  bottom: max(64px, calc(env(safe-area-inset-bottom) + 48px));
+  max-width: min(420px, 78vw);
+  opacity: 0;
+  transform: translateY(10px);
+  transition: transform 0.5s ease;
+}
+
+#copy.is-on { transform: none; }
+
+#copy h1 {
+  margin: 8px 0 0;
+  font-family: var(--display);
+  font-weight: 650;
+  font-size: clamp(42px, 6vw, 84px);
+  letter-spacing: 0.04em;
+  line-height: 0.9;
+}
+
+#copy .body {
+  margin: 12px 0 0;
+  max-width: 32ch;
+  font-size: 12px;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+}
+
+.kicker { color: var(--ink-dim); }
+
+#hint {
+  left: 28px;
+  bottom: max(22px, env(safe-area-inset-bottom));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink-dim);
+  transition: opacity 0.4s ease;
+}
+
+#hint i {
+  display: block;
+  width: 1px;
+  height: 28px;
+  background: currentColor;
+  transform-origin: top;
+  animation: hint 1.6s ease-in-out infinite;
+}
+
+#hint.is-gone { opacity: 0; }
+
+#bar {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: rgba(23, 32, 36, 0.08);
+}
+
+#bar span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--ink);
+}
+
+#loader {
+  left: 28px;
+  top: 50%;
+  color: var(--ink-dim);
+  transition: opacity 0.4s ease;
+}
+
+#loader.is-done {
+  opacity: 0;
+}
+
+#wait {
+  position: fixed;
+  z-index: 4;
+  top: max(22px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  opacity: 0;
+  pointer-events: none;
+}
+
+#wait.is-on { opacity: 0.8; }
+
+#track { position: relative; z-index: 0; }
+
+@media (orientation: portrait) and (max-width: 900px) {
+  #poster,
+  #stage video {
+    object-fit: contain;
+  }
+
+  #copy h1 { font-size: 48px; }
+  #chrome, #copy, #hint { left: 16px; right: 16px; }
+  #chrome { padding-right: 16px; }
+}
+
+@keyframes hint {
+  0%, 100% { transform: scaleY(0.4); opacity: 0.4; }
+  50% { transform: scaleY(1); opacity: 1; }
+}

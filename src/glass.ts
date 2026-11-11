@@ -1,0 +1,358 @@
+import {
+  Color,
+  CubeTexture,
+  FrontSide,
+  LinearFilter,
+  NoColorSpace,
+  ShaderMaterial,
+  type Texture,
+} from 'three'
+
+let studio: CubeTexture | null = null
+
+/**
+ * Cool studio cube: dark walls and a few hard softboxes.
+ * Facets that face a box go bright; the rest stay dark, which is what
+ * makes the shard read as cut glass on SwiftShader.
+ */
+export function studioCubemap() {
+  if (studio) return studio
+  const size = 128
+  const faces = [
+    paintFace(size, '#1c2430', [
+      [0.08, 0.12, 0.34, 0.22, '#f4f7ff'],
+      [0.62, 0.55, 0.22, 0.16, '#9eb4c8'],
+    ]),
+    paintFace(size, '#121820', [[0.55, 0.18, 0.28, 0.2, '#d5e2ee']]),
+    paintFace(size, '#dfe6ee', [[0.18, 0.14, 0.64, 0.46, '#ffffff']]),
+    paintFace(size, '#0c1016', []),
+    paintFace(size, '#24303c', [[0.2, 0.22, 0.42, 0.28, '#f7fbff']]),
+    paintFace(size, '#182028', [[0.48, 0.58, 0.3, 0.18, '#c5d4e2']]),
+  ]
+  studio = new CubeTexture(faces)
+  studio.colorSpace = NoColorSpace
+  studio.magFilter = LinearFilter
+  studio.minFilter = LinearFilter
+  studio.needsUpdate = true
+  return studio
+}
+
+function paintFace(size: number, wall: string, boxes: Array<[number, number, number, number, string]>) {
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return canvas
+  ctx.fillStyle = wall
+  ctx.fillRect(0, 0, size, size)
+  for (const [x, y, w, h, color] of boxes) {
+    ctx.fillStyle = color
+    ctx.fillRect(x * size, y * size, w * size, h * size)
+  }
+  return canvas
+}
+
+export type GlassKind = 'crystal' | 'rings'
+
+/**
+ * Reflection plus fake refraction. No transmission pass, so SwiftShader
+ * still shows facets, dispersion, and a fresnel rim.
+ */
+export function createGlassMaterial(options: {
+  normalMap: Texture | null
+  roughnessMap: Texture | null
+  kind: GlassKind
+  outer?: boolean
+}) {
+  const crystal = options.kind === 'crystal'
+  const normalMap = options.normalMap
+  const roughnessMap = options.roughnessMap
+  if (normalMap) {
+    normalMap.colorSpace = NoColorSpace
+    normalMap.needsUpdate = true
+  }
+  if (roughnessMap) {
+    roughnessMap.colorSpace = NoColorSpace
+    roughnessMap.needsUpdate = true
+  }
+  const shared = {
+    uEnv: { value: studioCubemap() },
+    uNormalMap: { value: normalMap },
+    uRoughnessMap: { value: roughnessMap },
+    uHasNormal: { value: normalMap ? 1 : 0 },
+    uHasRough: { value: roughnessMap ? 1 : 0 },
+  }
+  if (!crystal) {
+    return new ShaderMaterial({
+      name: 'ring-glass',
+      side: FrontSide,
+      fog: false,
+      toneMapped: false,
+      uniforms: {
+        ...shared,
+        uNormalScale: { value: 0.85 },
+        uAbsorb: { value: new Color('#1a2836') },
+        uCore: { value: new Color('#d7e6f2') },
+        uIor: { value: 1.4 },
+        uOuter: { value: options.outer ? 1 : 0 },
+      },
+      vertexShader: ringsVertex,
+      fragmentShader: ringsFragment,
+    })
+  }
+  return new ShaderMaterial({
+    name: 'crystal-glass',
+    side: FrontSide,
+    fog: false,
+    toneMapped: false,
+    uniforms: {
+      ...shared,
+      // The v2 normal map pits the faces if it is left at full strength.
+      uNormalScale: { value: 0.35 },
+      uAbsorb: { value: new Color().setRGB(0.02, 0.024, 0.03) },
+      uCore: { value: new Color().setRGB(0.26, 0.3, 0.34) },
+      uIor: { value: 1.31 },
+    },
+    vertexShader: crystalVertex,
+    fragmentShader: crystalFragment,
+  })
+}
+
+const ringsVertex = /* glsl */ `
+  varying vec3 vWorld;
+  varying vec3 vNormal;
+  varying vec2 vUv;
+  void main() {
+    vec4 world = modelMatrix * vec4(position, 1.0);
+    vWorld = world.xyz;
+    vec3 nWorld = mat3(modelMatrix) * normal;
+    vNormal = length(nWorld) > 1e-5 ? nWorld / length(nWorld) : vec3(0.0, 1.0, 0.0);
+    vUv = uv;
+    gl_Position = projectionMatrix * viewMatrix * world;
+  }
+`
+
+const ringsFragment = /* glsl */ `
+      uniform samplerCube uEnv;
+      uniform sampler2D uNormalMap;
+      uniform sampler2D uRoughnessMap;
+      uniform float uHasNormal;
+      uniform float uHasRough;
+      uniform float uNormalScale;
+      uniform vec3 uAbsorb;
+      uniform vec3 uCore;
+      uniform float uIor;
+      uniform float uOuter;
+      varying vec3 vWorld;
+      varying vec3 vNormal;
+      varying vec2 vUv;
+
+      vec3 toLinear(vec3 c) {
+        return pow(max(c, vec3(0.0)), vec3(2.2));
+      }
+
+      vec3 envSample(vec3 dir) {
+        float dLen = length(dir);
+        vec3 safeDir = dLen > 1e-5 ? dir / dLen : vec3(0.0, 1.0, 0.0);
+        return toLinear(textureCube(uEnv, safeDir).rgb);
+      }
+
+      vec3 perturb(vec3 n) {
+        if (uHasNormal < 0.5) return n;
+        vec3 mapN = texture2D(uNormalMap, vUv).xyz * 2.0 - 1.0;
+        mapN.xy *= uNormalScale;
+        vec3 q0 = dFdx(vWorld);
+        vec3 q1 = dFdy(vWorld);
+        vec2 st0 = dFdx(vUv);
+        vec2 st1 = dFdy(vUv);
+        float det = st0.x * st1.y - st1.x * st0.y;
+        // Edge-on ring faces have zero UV derivatives. normalize(0) is NaN and
+        // poisons the whole half-float target on Metal.
+        if (abs(det) < 1e-5) return n;
+        vec3 t = q0 * st1.y - q1 * st0.y;
+        float tl = length(t);
+        if (tl < 1e-5) return n;
+        t /= tl;
+        if (det < 0.0) t = -t;
+        vec3 b = cross(n, t);
+        float bl = length(b);
+        if (bl < 1e-5) return n;
+        b /= bl;
+        vec3 bent = mat3(t, b, n) * mapN;
+        float nl = length(bent);
+        if (nl < 1e-5) return n;
+        return bent / nl;
+      }
+
+      void main() {
+        vec3 nGeom = vNormal;
+        float nLen = length(nGeom);
+        vec3 n = perturb(nLen > 1e-5 ? nGeom / nLen : vec3(0.0, 1.0, 0.0));
+        vec3 viewDelta = cameraPosition - vWorld;
+        float vLen = length(viewDelta);
+        vec3 v = vLen > 1e-5 ? viewDelta / vLen : vec3(0.0, 0.0, 1.0);
+        float ndv = clamp(dot(n, v), 0.0, 1.0);
+        float fresnel = pow(1.0 - ndv, 2.4);
+        vec3 reflectDir = reflect(-v, n);
+
+        float rough = 0.22;
+        if (uHasRough > 0.5) rough = texture2D(uRoughnessMap, vUv).g;
+
+        vec3 key = vec3(0.42, 0.86, 0.28) / length(vec3(0.42, 0.86, 0.28));
+        vec3 rimLight = vec3(-0.55, 0.25, 0.75) / length(vec3(-0.55, 0.25, 0.75));
+        float gloss = mix(28.0, 140.0, 1.0 - rough);
+        float spec = pow(max(dot(reflect(-key, n), v), 0.0), gloss);
+        float spec2 = pow(max(dot(reflect(-rimLight, n), v), 0.0), 48.0);
+        vec3 reflected = envSample(reflectDir);
+
+        if (uOuter > 0.5) {
+          float eta = 1.0 / uIor;
+          vec3 refrR = refract(-v, n, eta * 1.04);
+          vec3 refrG = refract(-v, n, eta);
+          vec3 refrB = refract(-v, n, eta * 0.94);
+          if (dot(refrR, refrR) < 0.001) refrR = reflectDir;
+          if (dot(refrG, refrG) < 0.001) refrG = reflectDir;
+          if (dot(refrB, refrB) < 0.001) refrB = reflectDir;
+          vec3 refracted = vec3(envSample(refrR).r, envSample(refrG).g, envSample(refrB).b);
+          vec3 body = mix(vec3(0.04, 0.06, 0.08), vec3(0.28, 0.36, 0.44), ndv);
+          vec3 glass = mix(body, refracted * 0.9, 0.62);
+          glass = mix(glass, reflected, fresnel * 0.82);
+          glass += vec3(1.0) * pow(fresnel, 1.8) * 0.9;
+          glass += spec * vec3(1.35);
+          glass += spec2 * vec3(0.7, 0.84, 1.0) * 0.55;
+          gl_FragColor = vec4(clamp(glass, 0.0, 3.0), 1.0);
+          return;
+        }
+
+        float wear = fract(sin(dot(vWorld.xyz, vec3(19.7, 43.1, 7.3))) * 12543.2);
+        float chip = smoothstep(0.82, 0.97, wear);
+        float ndl = clamp(dot(n, key), 0.0, 1.0);
+        vec3 stone = mix(vec3(0.10, 0.12, 0.14), vec3(0.46, 0.52, 0.58), ndl);
+        stone *= mix(0.72, 1.0, wear);
+        stone = mix(stone, stone * 0.45, chip);
+        vec3 color = stone;
+        color = mix(color, reflected * 0.55, fresnel * 0.45);
+        color += spec * vec3(1.05, 1.08, 1.12) * 0.35;
+        color += spec2 * vec3(0.62, 0.74, 0.86) * 0.16;
+        color += vec3(0.86, 0.93, 1.0) * pow(fresnel, 2.4) * 0.28;
+        gl_FragColor = vec4(clamp(color, 0.0, 1.6), 1.0);
+      }
+`
+
+// Smoky ice. The normal map is sampled raw (NoColorSpace) in the glTF tangent frame.
+// Rainbow is a grazing fringe only — it never multiplies the body colour.
+const crystalVertex = /* glsl */ `
+  attribute vec4 tangent;
+  varying vec3 vWorld;
+  varying vec3 vObj;
+  varying vec3 vNormal;
+  varying vec3 vTangent;
+  varying float vHand;
+  varying vec2 vUv;
+  vec3 safeNormalize(vec3 v) {
+    float len = length(v);
+    return len > 1e-5 ? v / len : vec3(0.0, 1.0, 0.0);
+  }
+  void main() {
+    vObj = position;
+    vec4 world = modelMatrix * vec4(position, 1.0);
+    vWorld = world.xyz;
+    vNormal = safeNormalize(mat3(modelMatrix) * normal);
+    vTangent = safeNormalize(mat3(modelMatrix) * tangent.xyz);
+    vHand = tangent.w;
+    vUv = uv;
+    gl_Position = projectionMatrix * viewMatrix * world;
+  }
+`
+
+const crystalFragment = /* glsl */ `
+  uniform samplerCube uEnv;
+  uniform sampler2D uNormalMap;
+  uniform sampler2D uRoughnessMap;
+  uniform float uHasNormal;
+  uniform float uHasRough;
+  uniform float uNormalScale;
+  uniform vec3 uAbsorb;
+  uniform vec3 uCore;
+  uniform float uIor;
+  varying vec3 vWorld;
+  varying vec3 vObj;
+  varying vec3 vNormal;
+  varying vec3 vTangent;
+  varying float vHand;
+  varying vec2 vUv;
+
+  vec3 safeNormalize(vec3 v) {
+    float len = length(v);
+    return len > 1e-5 ? v / len : vec3(0.0, 1.0, 0.0);
+  }
+
+  vec3 toLinear(vec3 c) {
+    return pow(max(c, vec3(0.0)), vec3(2.2));
+  }
+
+  vec3 envGrey(vec3 dir) {
+    vec3 c = toLinear(textureCube(uEnv, safeNormalize(dir)).rgb);
+    float l = dot(c, vec3(0.28, 0.54, 0.18));
+    return vec3(l * 0.42, l * 0.46, l * 0.52);
+  }
+
+  vec3 shadeNormal(vec3 n) {
+    if (uHasNormal < 0.5) return n;
+    vec3 mapN = texture2D(uNormalMap, vUv).xyz * 2.0 - 1.0;
+    mapN.xy *= uNormalScale;
+    vec3 t = vTangent;
+    float tl = length(t);
+    if (tl < 1e-5) return n;
+    t /= tl;
+    vec3 b = cross(n, t) * vHand;
+    float bl = length(b);
+    if (bl < 1e-5) return n;
+    b /= bl;
+    vec3 bent = mat3(t, b, n) * mapN;
+    float nl = length(bent);
+    return nl > 1e-5 ? bent / nl : n;
+  }
+
+  void main() {
+    vec3 n = shadeNormal(safeNormalize(vNormal));
+    vec3 viewDelta = cameraPosition - vWorld;
+    vec3 v = length(viewDelta) > 1e-5 ? viewDelta / length(viewDelta) : vec3(0.0, 0.0, 1.0);
+    float ndv = clamp(dot(n, v), 0.0, 1.0);
+    float fresnel = pow(1.0 - ndv, 3.4);
+    vec3 reflectDir = reflect(-v, n);
+
+    float eta = 1.0 / uIor;
+    vec3 refrR = refract(-v, n, eta * 1.004);
+    vec3 refrG = refract(-v, n, eta);
+    vec3 refrB = refract(-v, n, eta * 0.996);
+    if (dot(refrR, refrR) < 0.001) refrR = reflectDir;
+    if (dot(refrG, refrG) < 0.001) refrG = reflectDir;
+    if (dot(refrB, refrB) < 0.001) refrB = reflectDir;
+    vec3 split = vec3(envGrey(refrR).r, envGrey(refrG).g, envGrey(refrB).b);
+    float splitL = dot(split, vec3(0.3, 0.5, 0.2));
+    vec3 refracted = mix(vec3(splitL), split, 0.18);
+    vec3 reflected = envGrey(reflectDir);
+
+    float rough = 0.55;
+    if (uHasRough > 0.5) rough = clamp(texture2D(uRoughnessMap, vUv).g, 0.0, 1.0);
+    vec3 key = safeNormalize(vec3(0.32, 0.9, 0.24));
+    float gloss = mix(24.0, 120.0, 1.0 - rough * 0.55);
+    float spec = pow(max(dot(reflect(-key, n), v), 0.0), gloss);
+
+    float keyNd = clamp(dot(n, key), 0.0, 1.0);
+    vec3 body = mix(uAbsorb, uCore, pow(keyNd, 0.6));
+    vec3 color = body;
+    color += refracted * keyNd * 0.05;
+    color += reflected * fresnel * 0.2;
+    color += spec * vec3(0.9, 0.94, 0.98) * 0.55;
+    float mx = max(color.r, max(color.g, color.b));
+    float mn = min(color.r, min(color.g, color.b));
+    float sat = (mx - mn) / max(mx, 0.0001);
+    if (sat > 0.2) {
+      float l = dot(color, vec3(0.3, 0.5, 0.2));
+      color = mix(vec3(l), color, 0.2 / sat);
+    }
+    gl_FragColor = vec4(color, 1.0);
+  }
+`

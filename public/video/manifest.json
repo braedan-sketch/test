@@ -1,0 +1,512 @@
+{
+  "version": 1,
+  "source": {
+    "file": "higgs/scenes/final_full.mp4",
+    "width": 1920,
+    "height": 1080,
+    "fps": 24,
+    "total_frames": 2014,
+    "duration_seconds": 83.916667,
+    "loop": true,
+    "loop_note": "Last frame flows into frame 0. Playback should wrap from frame 2013 to frame 0 with no cut."
+  },
+  "encode": {
+    "video_codec": "h264",
+    "audio": null,
+    "pix_fmt": "yuv420p",
+    "profile": "high",
+    "gop": 8,
+    "bframes": 0,
+    "open_gop": false,
+    "scenecut": 0,
+    "fps": 24,
+    "faststart": true,
+    "note": "Short fixed GOP (8 frames, 1/3 s) and no B-frames so a scroll-scrub player can seek with at most 7 P-frames of decode. H.264 for Safari/Chrome/Firefox. VP9 copies were skipped: they would roughly double the package and Safari still needs H.264."
+  },
+  "desktop": {
+    "resolution": {
+      "width": 1600,
+      "height": 900
+    },
+    "crf": 18,
+    "total_size_bytes": 54389314,
+    "chunks": [
+      {
+        "file": "desktop/chunk_00_s01.mp4",
+        "id": "chunk_00_s01",
+        "scene": "s01",
+        "start_frame": 0,
+        "end_frame": 261,
+        "frame_count": 262,
+        "fps": 24,
+        "width": 1600,
+        "height": 900,
+        "duration_seconds": 10.916667,
+        "size_bytes": 6647551,
+        "codec": "h264",
+        "profile": "High",
+        "pix_fmt": "yuv420p",
+        "gop": 8,
+        "bframes": 0,
+        "crf": 18
+      },
+      {
+        "file": "desktop/chunk_01_s03.mp4",
+        "id": "chunk_01_s03",
+        "scene": "s03",
+        "start_frame": 262,
+        "end_frame": 708,
+        "frame_count": 447,
+        "fps": 24,
+        "width": 1600,
+        "height": 900,
+        "duration_seconds": 18.625,
+        "size_bytes": 11153018,
+        "codec": "h264",
+        "profile": "High",
+        "pix_fmt": "yuv420p",
+        "gop": 8,
+        "bframes": 0,
+        "crf": 18
+      },
+      {
+        "file": "desktop/chunk_02_s04.mp4",
+        "id": "chunk_02_s04",
+        "scene": "s04",
+        "start_frame": 709,
+        "end_frame": 1157,
+        "frame_count": 449,
+        "fps": 24,
+        "width": 1600,
+        "height": 900,
+        "duration_seconds": 18.708333,
+        "size_bytes": 12635637,
+        "codec": "h264",
+        "profile": "High",
+        "pix_fmt": "yuv420p",
+        "gop": 8,
+        "bframes": 0,
+        "crf": 18
+      },
+      {
+        "file": "desktop/chunk_03_s05.mp4",
+        "id": "chunk_03_s05",
+        "scene": "s05",
+        "start_frame": 1158,
+        "end_frame": 1612,
+        "frame_count": 455,
+        "fps": 24,
+        "width": 1600,
+        "height": 900,
+        "duration_seconds": 18.958333,
+        "size_bytes": 12196238,
+        "codec": "h264",
+        "profile": "High",
+        "pix_fmt": "yuv420p",
+        "gop": 8,
+        "bframes": 0,
+        "crf": 18
+      },
+      {
+        "file": "desktop/chunk_04_s06.mp4",
+        "id": "chunk_04_s06",
+        "scene": "s06",
+        "start_frame": 1613,
+        "end_frame": 2013,
+        "frame_count": 401,
+        "fps": 24,
+        "width": 1600,
+        "height": 900,
+        "duration_seconds": 16.708333,
+        "size_bytes": 11756870,
+        "codec": "h264",
+        "profile": "High",
+        "pix_fmt": "yuv420p",
+        "gop": 8,
+        "bframes": 0,
+        "crf": 18
+      }
+    ]
+  },
+  "mobile": {
+    "resolution": {
+      "width": 960,
+      "height": 540
+    },
+    "crf": 17,
+    "aspect": "16:9",
+    "crop": "none",
+    "choice_note": "960x540 16:9, not a 720-wide portrait crop. The rings and falling rocks are composed to the full 16:9 frame (rings pass the left and right edges), so a centre crop would cut them off. Letterbox or contain on a portrait phone.",
+    "total_size_bytes": 24848316,
+    "chunks": [
+      {
+        "file": "mobile/chunk_00_s01.mp4",
+        "id": "chunk_00_s01",
+        "scene": "s01",
+        "start_frame": 0,
+        "end_frame": 261,
+        "frame_count": 262,
+        "fps": 24,
+        "width": 960,
+        "height": 540,
+        "duration_seconds": 10.916667,
+        "size_bytes": 3089932,
+        "codec": "h264",
+        "profile": "High",
+        "pix_fmt": "yuv420p",
+        "gop": 8,
+        "bframes": 0,
+        "crf": 17
+      },
+      {
+        "file": "mobile/chunk_01_s03.mp4",
+        "id": "chunk_01_s03",
+        "scene": "s03",
+        "start_frame": 262,
+        "end_frame": 708,
+        "frame_count": 447,
+        "fps": 24,
+        "width": 960,
+        "height": 540,
+        "duration_seconds": 18.625,
+        "size_bytes": 5051003,
+        "codec": "h264",
+        "profile": "High",
+        "pix_fmt": "yuv420p",
+        "gop": 8,
+        "bframes": 0,
+        "crf": 17
+      },
+      {
+        "file": "mobile/chunk_02_s04.mp4",
+        "id": "chunk_02_s04",
+        "scene": "s04",
+        "start_frame": 709,
+        "end_frame": 1157,
+        "frame_count": 449,
+        "fps": 24,
+        "width": 960,
+        "height": 540,
+        "duration_seconds": 18.708333,
+        "size_bytes": 5640480,
+        "codec": "h264",
+        "profile": "High",
+        "pix_fmt": "yuv420p",
+        "gop": 8,
+        "bframes": 0,
+        "crf": 17
+      },
+      {
+        "file": "mobile/chunk_03_s05.mp4",
+        "id": "chunk_03_s05",
+        "scene": "s05",
+        "start_frame": 1158,
+        "end_frame": 1612,
+        "frame_count": 455,
+        "fps": 24,
+        "width": 960,
+        "height": 540,
+        "duration_seconds": 18.958333,
+        "size_bytes": 5574760,
+        "codec": "h264",
+        "profile": "High",
+        "pix_fmt": "yuv420p",
+        "gop": 8,
+        "bframes": 0,
+        "crf": 17
+      },
+      {
+        "file": "mobile/chunk_04_s06.mp4",
+        "id": "chunk_04_s06",
+        "scene": "s06",
+        "start_frame": 1613,
+        "end_frame": 2013,
+        "frame_count": 401,
+        "fps": 24,
+        "width": 960,
+        "height": 540,
+        "duration_seconds": 16.708333,
+        "size_bytes": 5492141,
+        "codec": "h264",
+        "profile": "High",
+        "pix_fmt": "yuv420p",
+        "gop": 8,
+        "bframes": 0,
+        "crf": 17
+      }
+    ]
+  },
+  "scenes": [
+    {
+      "id": "s01",
+      "name": "Igloo hero + fog transition",
+      "start_frame": 0,
+      "end_frame": 261,
+      "frame_count": 262,
+      "duration_seconds": 10.916667,
+      "description": "Frosted igloo blocks settle on a snowy mound, camera pulls back to the hero framing, then fog rolls up with rainbow leaks into a whiteout. Sub-beats (approx): hero settle + pullback 0-144; fog dive to whiteout 145-261.",
+      "overlay_hint": "Title/logo overlays work over the hero pullback (frames 0-144). Fade them before the fog swallows the igloo (from ~145)."
+    },
+    {
+      "id": "s03",
+      "name": "Falling rocks + transition into rings",
+      "start_frame": 262,
+      "end_frame": 708,
+      "frame_count": 447,
+      "duration_seconds": 18.625,
+      "description": "Camera falls through pale haze as faceted frosted rocks in thin wireframe boxes rise through frame; ring pieces then assemble and the view tilts top-down. Sub-beats (approx): first rock 262-402; second rock 403-543; rings assemble 544-708.",
+      "overlay_hint": "Callout labels can sit in the mid-frame haze beside each rock (262-543). Clear them as the rings take over (~544)."
+    },
+    {
+      "id": "s04",
+      "name": "Camera dive through the rings to the core",
+      "start_frame": 709,
+      "end_frame": 1157,
+      "frame_count": 449,
+      "duration_seconds": 18.708333,
+      "description": "Rings stay put while the camera drops straight down the centre; each ring glows, passes around the frame edges and reveals the next. They flatten into etched circles and the core lands on the glowing disc. Sub-beats (approx): outer ring descent 709-849; pulse to next rings 850-1000; final sweep, flatten, core on disc 1001-1157.",
+      "overlay_hint": "Keep overlays minimal and at the edges; the rings use the full 16:9 frame. A centre-safe title can land as the core settles (~1100-1157)."
+    },
+    {
+      "id": "s05",
+      "name": "Particle figure + transition into rebuild",
+      "start_frame": 1158,
+      "end_frame": 1612,
+      "frame_count": 455,
+      "duration_seconds": 18.958333,
+      "description": "The core rises into a chubby bear-like particle figure on a stepped glowing disc under a white halo; camera tilts from top-down to a low hero angle and orbits, then the disc ripples with rainbow fringing and melts into a snowy mountain. Sub-beats (approx): tilt up / figure forms 1158-1306; orbit to hero angle 1307-1447; ripple, fade, mountain + shards 1448-1612.",
+      "overlay_hint": "Figure hero copy works during the low-angle orbit (1307-1447). Fade it as the disc ripples (~1448)."
+    },
+    {
+      "id": "s06",
+      "name": "Shards fly up, igloo rebuilds, loop back to hero",
+      "start_frame": 1613,
+      "end_frame": 2013,
+      "frame_count": 401,
+      "duration_seconds": 16.708333,
+      "description": "The figure dissolves under a rainbow halo, ice shards and white blocks fly up, a thin wireframe dome flashes and the igloo assembles course by course, settling into scene 1's first frame so the sequence loops. Sub-beats (approx): shards + figure fade 1613-1733; assembly 1734-1917; glide into hero framing 1918-2013. Last frame flows into frame 0 (loop MAD ~1.1).",
+      "overlay_hint": "End-card or loop CTA can appear as the igloo settles (1918-2013). This range should match the opening hero overlays."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "s01",
+      "to": "s03",
+      "around_frame": 262,
+      "note": "Whiteout into falling rocks. A 3-frame crossfade already lives in frames 259-261."
+    },
+    {
+      "from": "s03",
+      "to": "s04",
+      "around_frame": 709,
+      "note": "Top-down rings opening into the camera dive. Crossfade in frames 706-708."
+    },
+    {
+      "from": "s04",
+      "to": "s05",
+      "around_frame": 1158,
+      "note": "Core on the glowing disc, figure begins to form. Crossfade in frames 1155-1157."
+    },
+    {
+      "from": "s05",
+      "to": "s06",
+      "around_frame": 1613,
+      "note": "Snowy mountain, shards rising. Crossfade in frames 1610-1612."
+    },
+    {
+      "from": "s06",
+      "to": "s01",
+      "around_frame": 0,
+      "note": "Seamless loop: frame 2013 flows into frame 0. Do not add a fade here."
+    }
+  ],
+  "poster": {
+    "file": "poster.jpg",
+    "frame": 0,
+    "width": 1920,
+    "height": 1080,
+    "size_bytes": 116769
+  },
+  "fallback": {
+    "file": "fallback/chunk_00_s01_jpg.zip",
+    "start_frame": 0,
+    "frame_count": 262,
+    "fps": 24,
+    "width": 1280,
+    "height": 720,
+    "jpeg_q": 5,
+    "naming": "chunk_00_s01/00000.jpg .. 00261.jpg (5-digit, start 0)",
+    "size_bytes": 7728282,
+    "note": "Optional fallback for scene 1 only, if a browser cannot scrub the MP4 chunks."
+  },
+  "usage": {
+    "scroll_scrub": "Map scroll progress 0..1 (or a looping 0..1) to frame = ((Math.round(progress * total_frames) % total_frames) + total_frames) % total_frames. When the frame falls in a chunk, seek that chunk to local_frame = frame - start_frame. Because GOP is 8 and there are no B-frames, seeking is cheap. Preload the current + next chunk. Use the mobile tier under a width/dpr breakpoint. If a browser cannot scrub MP4 reliably, the JPEG zip covers only chunk 00 (scene 1) as a limited fallback.",
+    "concatenation": "Chunks are contiguous and complete: chunk n last frame + 1 == chunk n+1 first frame, total 2014 frames, no overlaps or gaps."
+  },
+  "verification": {
+    "desktop_joins": [
+      {
+        "chunk": "chunk_00_s01",
+        "src_range": [
+          0,
+          261
+        ],
+        "sample_mad_mean": 2.593,
+        "sample_mad_max": 2.612,
+        "join_to_next_mad": 1.522,
+        "problems": []
+      },
+      {
+        "chunk": "chunk_01_s03",
+        "src_range": [
+          262,
+          708
+        ],
+        "sample_mad_mean": 2.773,
+        "sample_mad_max": 3.011,
+        "join_to_next_mad": 2.627,
+        "problems": []
+      },
+      {
+        "chunk": "chunk_02_s04",
+        "src_range": [
+          709,
+          1157
+        ],
+        "sample_mad_mean": 2.573,
+        "sample_mad_max": 2.668,
+        "join_to_next_mad": 1.303,
+        "problems": []
+      },
+      {
+        "chunk": "chunk_03_s05",
+        "src_range": [
+          1158,
+          1612
+        ],
+        "sample_mad_mean": 2.538,
+        "sample_mad_max": 2.609,
+        "join_to_next_mad": 1.961,
+        "problems": []
+      },
+      {
+        "chunk": "chunk_04_s06",
+        "src_range": [
+          1613,
+          2013
+        ],
+        "sample_mad_mean": 2.546,
+        "sample_mad_max": 2.62,
+        "join_to_next_mad": null,
+        "problems": []
+      }
+    ],
+    "mobile_joins": [
+      {
+        "chunk": "chunk_00_s01",
+        "src_range": [
+          0,
+          261
+        ],
+        "sample_mad_mean": 2.674,
+        "sample_mad_max": 2.791,
+        "join_to_next_mad": 1.569,
+        "problems": []
+      },
+      {
+        "chunk": "chunk_01_s03",
+        "src_range": [
+          262,
+          708
+        ],
+        "sample_mad_mean": 2.72,
+        "sample_mad_max": 2.878,
+        "join_to_next_mad": 2.661,
+        "problems": []
+      },
+      {
+        "chunk": "chunk_02_s04",
+        "src_range": [
+          709,
+          1157
+        ],
+        "sample_mad_mean": 2.579,
+        "sample_mad_max": 2.732,
+        "join_to_next_mad": 1.329,
+        "problems": []
+      },
+      {
+        "chunk": "chunk_03_s05",
+        "src_range": [
+          1158,
+          1612
+        ],
+        "sample_mad_mean": 2.531,
+        "sample_mad_max": 2.619,
+        "join_to_next_mad": 1.967,
+        "problems": []
+      },
+      {
+        "chunk": "chunk_04_s06",
+        "src_range": [
+          1613,
+          2013
+        ],
+        "sample_mad_mean": 2.618,
+        "sample_mad_max": 2.67,
+        "join_to_next_mad": null,
+        "problems": []
+      }
+    ],
+    "desktop_gop": {
+      "chunk_00": {
+        "frame_types": {
+          "I": 33,
+          "P": 229
+        },
+        "keyframe_count": 33,
+        "max_gop": 8,
+        "min_gop": 8,
+        "b_frames": 0,
+        "frame_count": 262
+      },
+      "chunk_02": {
+        "frame_types": {
+          "I": 57,
+          "P": 392
+        },
+        "keyframe_count": 57,
+        "max_gop": 8,
+        "min_gop": 8,
+        "b_frames": 0,
+        "frame_count": 449
+      }
+    },
+    "mobile_gop": {
+      "chunk_00": {
+        "frame_types": {
+          "I": 33,
+          "P": 229
+        },
+        "keyframe_count": 33,
+        "max_gop": 8,
+        "min_gop": 8,
+        "b_frames": 0,
+        "frame_count": 262
+      },
+      "chunk_02": {
+        "frame_types": {
+          "I": 57,
+          "P": 392
+        },
+        "keyframe_count": 57,
+        "max_gop": 8,
+        "min_gop": 8,
+        "b_frames": 0,
+        "frame_count": 449
+      }
+    },
+    "max_file_bytes": 14680064,
+    "concat_frames": 2014
+  }
+}

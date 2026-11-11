@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light" />
+    <meta name="description" content="BLENDY — a scroll-scrubbed study in ice, light, and release." />
+    <meta name="theme-color" content="#c5ced4" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preload" href="./fonts/big-shoulders-display.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="./video/poster.jpg" as="image" />
+    <style>
+      @font-face {
+        font-family: 'Big Shoulders Display';
+        font-style: normal;
+        font-weight: 550 700;
+        font-display: optional;
+        src: url('./fonts/big-shoulders-display.woff2') format('woff2');
+      }
+    </style>
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" />
+    <title>BLENDY</title>
+  </head>
+  <body>
+    <img id="poster" src="./video/poster.jpg" alt="" />
+    <div id="stage">
+      <video id="vid-a" muted playsinline webkit-playsinline preload="auto" poster="./video/poster.jpg"></video>
+      <video id="vid-b" muted playsinline webkit-playsinline preload="auto" poster="./video/poster.jpg"></video>
+    </div>
+    <header id="chrome">
+      <p class="wordmark">BLENDY</p>
+      <p id="readout" aria-live="off">0000</p>
+    </header>
+    <div id="copy">
+      <p class="kicker"></p>
+      <h1></h1>
+      <p class="body"></p>
+    </div>
+    <div id="hint"><span>Scroll</span><i></i></div>
+    <div id="bar" aria-hidden="true"><span></span></div>
+    <p id="loader" role="status">Loading the reel</p>
+    <p id="wait" role="status">Loading</p>
+    <div id="track"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
