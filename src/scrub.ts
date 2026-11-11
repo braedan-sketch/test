@@ -21,6 +21,15 @@ type Manifest = {
 
 type Job = { frame: number; chunk: Chunk; time: number; token: number }
 
+type Entry = {
+  promise: Promise<string>
+  url: string | null
+  resolve: (url: string) => void
+  reject: (error: unknown) => void
+  started: boolean
+  controller: AbortController | null
+}
+
 type Buffer = {
   el: HTMLVideoElement
   chunk: Chunk | null
@@ -75,6 +84,7 @@ export async function startScrub() {
   const hint = document.querySelector('#hint')
   const bar = document.querySelector('#bar span')
   const loader = document.querySelector('#loader')
+  const wait = document.querySelector('#wait')
   const word = document.querySelector('.wordmark')
   const videoA = document.querySelector('#vid-a')
   const videoB = document.querySelector('#vid-b')
@@ -90,6 +100,7 @@ export async function startScrub() {
     !(hint instanceof HTMLElement) ||
     !(bar instanceof HTMLElement) ||
     !(loader instanceof HTMLElement) ||
+    !(wait instanceof HTMLElement) ||
     !(word instanceof HTMLElement) ||
     !(videoA instanceof HTMLVideoElement) ||
     !(videoB instanceof HTMLVideoElement)
@@ -98,7 +109,9 @@ export async function startScrub() {
   }
 
   word.textContent = brand.name
-  const response = await fetch(mediaUrl('manifest.json'))
+  const requested = new URLSearchParams(window.location.search).get('manifest')
+  const manifestFile = requested && /^[A-Za-z0-9._-]+$/.test(requested) ? requested : 'manifest.json'
+  const response = await fetch(mediaUrl(manifestFile))
   if (!response.ok) throw new Error('Missing video manifest')
   const manifest = (await response.json()) as Manifest
   const total = manifest.source.total_frames
@@ -106,6 +119,136 @@ export async function startScrub() {
 
   let tier = chooseTier()
   let chunks = manifest[tier].chunks
+  const cache = new Map<string, Entry>()
+  const backQueue: Chunk[] = []
+  const urgentQueue: Chunk[] = []
+  const retries = new Map<string, number>()
+  let backLive = 0
+  let urgentLive = 0
+  let epoch = 0
+
+  const readyUrl = (chunk: Chunk) => cache.get(chunk.id)?.url ?? null
+
+  // One background transfer plus one urgent transfer. The urgent slot stays
+  // free so a settled chunk starts immediately, and each id is fetched once.
+  const pumpDownloads = () => {
+    while (urgentLive < 1 && urgentQueue.length > 0) {
+      const chunk = urgentQueue.shift()
+      if (!chunk || !beginDownload(chunk, 'urgent')) continue
+    }
+    while (backLive < 1 && backQueue.length > 0) {
+      const chunk = backQueue.shift()
+      if (!chunk || !beginDownload(chunk, 'back')) continue
+    }
+  }
+
+  const beginDownload = (chunk: Chunk, slot: 'urgent' | 'back') => {
+    const entry = cache.get(chunk.id)
+    if (!entry || entry.url || entry.started) return false
+    entry.started = true
+    if (slot === 'urgent') urgentLive += 1
+    else backLive += 1
+    const ticket = epoch
+    const controller = new AbortController()
+    entry.controller = controller
+    fetch(mediaUrl(chunk.file), { signal: controller.signal })
+      .then((res) => {
+        if (!res.ok) throw new Error(chunk.file)
+        return res.blob()
+      })
+      .then((blob) => {
+        if (ticket !== epoch || cache.get(chunk.id) !== entry) return
+        const url = URL.createObjectURL(blob)
+        entry.url = url
+        entry.resolve(url)
+      })
+      .catch((error: unknown) => {
+        if (ticket !== epoch || cache.get(chunk.id) !== entry) return
+        cache.delete(chunk.id)
+        entry.reject(error)
+        const attempt = (retries.get(chunk.id) ?? 0) + 1
+        retries.set(chunk.id, attempt)
+        if (attempt <= 2) void enqueue(chunk, slot === 'urgent').catch(() => undefined)
+      })
+      .finally(() => {
+        if (ticket !== epoch) return
+        if (slot === 'urgent') urgentLive = Math.max(0, urgentLive - 1)
+        else backLive = Math.max(0, backLive - 1)
+        if (cache.get(chunk.id) === entry) entry.controller = null
+        pumpDownloads()
+      })
+    return true
+  }
+
+  const enqueue = (chunk: Chunk, urgent = false) => {
+    const hit = cache.get(chunk.id)
+    if (hit) {
+      if (urgent && !hit.url && !hit.started && !urgentQueue.some((item) => item.id === chunk.id)) {
+        const index = backQueue.findIndex((item) => item.id === chunk.id)
+        if (index >= 0) backQueue.splice(index, 1)
+        urgentQueue.unshift(chunk)
+        pumpDownloads()
+      }
+      return hit.promise
+    }
+    let resolve!: (url: string) => void
+    let reject!: (error: unknown) => void
+    const promise = new Promise<string>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    void promise.catch(() => undefined)
+    cache.set(chunk.id, { promise, url: null, resolve, reject, started: false, controller: null })
+    if (urgent) urgentQueue.unshift(chunk)
+    else backQueue.push(chunk)
+    pumpDownloads()
+    return promise
+  }
+
+  const resetDownloads = () => {
+    epoch += 1
+    for (const entry of cache.values()) entry.controller?.abort()
+    for (const entry of cache.values()) if (entry.url) URL.revokeObjectURL(entry.url)
+    cache.clear()
+    backQueue.length = 0
+    urgentQueue.length = 0
+    retries.clear()
+    backLive = 0
+    urgentLive = 0
+  }
+
+  const loopDist = (a: number, b: number) => {
+    const span = Math.abs(a - b) % total
+    return Math.min(span, total - span)
+  }
+
+  const nearestReady = (frame: number) => {
+    let best: number | null = null
+    let bestDist = Infinity
+    for (const chunk of chunks) {
+      if (!readyUrl(chunk)) continue
+      const point =
+        frame >= chunk.start_frame && frame <= chunk.end_frame
+          ? frame
+          : loopDist(frame, chunk.start_frame) <= loopDist(frame, chunk.end_frame)
+            ? chunk.start_frame
+            : chunk.end_frame
+      const dist = loopDist(frame, point)
+      if (dist < bestDist) {
+        bestDist = dist
+        best = point
+      }
+    }
+    return best
+  }
+
+  const queueTier = (startIndex: number) => {
+    for (let step = 0; step < chunks.length; step += 1) {
+      const chunk = chunks[(startIndex + step) % chunks.length]
+      if (chunk) enqueue(chunk, false)
+    }
+  }
+  queueTier(0)
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
   const buffers = [makeBuffer(videoA), makeBuffer(videoB)]
@@ -202,19 +345,20 @@ export async function startScrub() {
         if (gen !== buf.gen || job.token !== serial) continue
         if (!ok) {
           chasing = null
-          retryAt = performance.now() + 40
+          if (readyUrl(job.chunk)) retryAt = performance.now() + 80
           continue
         }
         const landed = job.chunk.start_frame + Math.round((buf.landedTime ?? job.time) * fps)
         const want = modFrame(display, total)
-        const span = Math.abs(landed - want) % total
-        const nearWant = job.chunk.id === chunkAt(want).id && Math.min(span, total - span) <= 3
         if (buf.want) continue
-        if (!nearWant || showing(want)) {
-          chasing = null
-          continue
-        }
-        reveal(buf)
+        const exact = job.chunk.id === chunkAt(want).id && loopDist(landed, want) <= 3
+        const near = nearestReady(want)
+        const targetReady = readyUrl(chunkAt(want))
+        const standIn = near != null && !targetReady && loopDist(landed, near) <= 1
+        const shown = shownFrame()
+        const improves = shown == null || (near != null && loopDist(near, want) + 1 < loopDist(shown, want))
+        if (exact && !showing(want)) reveal(buf)
+        else if (standIn && improves) reveal(buf)
         chasing = null
       }
     } finally {
@@ -248,6 +392,8 @@ export async function startScrub() {
       body.textContent = beat.body
     }
     hint.classList.toggle('is-gone', scrollFrame > 48)
+    const exact = chunkAt(scrollFrame)
+    wait.classList.toggle('is-on', poster.classList.contains('is-hidden') && !readyUrl(exact))
   }
 
   const readProgress = (now: number) => {
@@ -268,6 +414,47 @@ export async function startScrub() {
     return progress
   }
 
+  const showNearest = (frame: number) => {
+    const near = nearestReady(frame)
+    if (near == null) return
+    const shown = shownFrame()
+    if (shown != null && loopDist(shown, frame) <= loopDist(near, frame) + 1) return
+    chase(near)
+  }
+
+  let prevAim = 0
+  let prevAimAt = performance.now()
+  let settleTimer = 0
+  let lastChaseAt = 0
+  const aim = (frame: number, now: number) => {
+    const dt = Math.max(0.016, (now - prevAimAt) / 1000)
+    const speed = loopDist(frame, prevAim) / dt
+    prevAim = frame
+    prevAimAt = now
+    const chunk = chunkAt(frame)
+    const go = () => {
+      if (readyUrl(chunk)) chase(frame)
+      else showNearest(frame)
+    }
+    if (speed > 120) {
+      window.clearTimeout(settleTimer)
+      settleTimer = window.setTimeout(() => {
+        const settled = modFrame(display, total)
+        const next = chunkAt(settled)
+        void enqueue(next, true).catch(() => undefined)
+        if (readyUrl(next)) chase(settled)
+        else showNearest(settled)
+      }, 160)
+      if (now - lastChaseAt < 90) return
+      lastChaseAt = now
+      go()
+      return
+    }
+    window.clearTimeout(settleTimer)
+    void enqueue(chunk, true).catch(() => undefined)
+    go()
+  }
+
   let last = performance.now()
   const tick = (now: number) => {
     const dt = Math.min(0.05, (now - last) / 1000)
@@ -284,7 +471,7 @@ export async function startScrub() {
     else if (delta < -total / 2) from -= total
     display = from + (targetFrame - from) * gain
     const frame = modFrame(display, total)
-    chase(frame)
+    aim(frame, now)
     paint(frame)
     requestAnimationFrame(tick)
   }
@@ -302,8 +489,9 @@ export async function startScrub() {
       buf.gen += 1
       buf.el.classList.remove('is-live')
       buf.el.removeAttribute('src')
-      buf.el.load()
     }
+    resetDownloads()
+    queueTier(0)
     front = buffers[0]!
     back = buffers[1]!
     chasing = null
@@ -327,6 +515,8 @@ export async function startScrub() {
     chunk: () => (front.el.classList.contains('is-live') ? (front.chunk?.id ?? null) : null),
     src: () => (front.el.classList.contains('is-live') ? front.el.currentSrc : ''),
     time: () => (front.el.classList.contains('is-live') ? front.el.currentTime : null),
+    ready: () => chunks.filter((chunk) => readyUrl(chunk)).map((chunk) => chunk.id),
+    waiting: () => wait.classList.contains('is-on'),
     scrollToFrame,
   }
 
@@ -335,8 +525,14 @@ export async function startScrub() {
   requestAnimationFrame(tick)
 
   async function land(buf: Buffer, job: Job, gen: number) {
-    const stale = () => gen !== buf.gen || (buf.want != null && buf.want.token !== job.token)
-    const ready = await ensureSource(buf, job.chunk, gen)
+    const stale = () => gen !== buf.gen || (buf.want != null && buf.want.token !== job.token) || job.token !== serial
+    const url = readyUrl(job.chunk)
+    if (!url) {
+      void enqueue(job.chunk, true).catch(() => undefined)
+      return false
+    }
+    if (stale()) return false
+    const ready = await attachBlob(buf, job.chunk, url, gen)
     if (!ready || stale()) return false
     const duration = buf.el.duration
     const limit = Number.isFinite(duration) ? Math.max(0, duration - 0.5 / fps) : job.time
@@ -360,18 +556,20 @@ function makeBuffer(el: HTMLVideoElement): Buffer {
   return { el, chunk: null, gen: 0, landedTime: null, want: null, running: false }
 }
 
-function ensureSource(buf: Buffer, chunk: Chunk, gen: number) {
-  const file = chunk.file.split('/').pop() ?? chunk.file
-  if (buf.chunk?.id === chunk.id && buf.el.readyState >= 1 && buf.el.currentSrc.endsWith(file)) {
-    return Promise.resolve(gen === buf.gen)
-  }
+function matchesBlob(el: HTMLVideoElement, url: string) {
+  return el.currentSrc === url && el.readyState >= 2 && !el.error
+}
+
+function attachBlob(buf: Buffer, chunk: Chunk, url: string, gen: number) {
+  if (buf.chunk?.id === chunk.id && matchesBlob(buf.el, url)) return Promise.resolve(gen === buf.gen)
   buf.landedTime = null
   buf.chunk = null
   buf.el.pause()
-  buf.el.src = mediaUrl(chunk.file)
-  buf.el.load()
-  return once(buf.el, 'loadeddata', 20000).then((ok) => {
-    if (!ok || gen !== buf.gen || !buf.el.currentSrc.endsWith(file)) return false
+  // Setting src starts the load. Calling load() immediately after makes WebKit
+  // cancel the blob and fail with MEDIA_ERR_SRC_NOT_SUPPORTED.
+  buf.el.src = url
+  return once(buf.el, url, 8000).then((ok) => {
+    if (!ok || gen !== buf.gen) return false
     buf.chunk = chunk
     return true
   })
@@ -430,20 +628,31 @@ function presentedAt(el: HTMLVideoElement, safe: number, fps: number) {
   })
 }
 
-function once(el: HTMLVideoElement, name: 'loadeddata', ms: number) {
-  if (el.readyState >= 2) return Promise.resolve(true)
+function once(el: HTMLVideoElement, url: string, ms: number) {
+  if (matchesBlob(el, url)) return Promise.resolve(true)
   return new Promise<boolean>((resolve) => {
     let settled = false
     const finish = (ok: boolean) => {
       if (settled) return
       settled = true
-      el.removeEventListener(name, onHit)
+      el.removeEventListener('loadeddata', onHit)
+      el.removeEventListener('error', onErr)
+      window.clearInterval(poll)
       window.clearTimeout(timer)
-      resolve(ok)
+      resolve(ok && matchesBlob(el, url))
     }
-    const onHit = () => finish(true)
+    const onHit = () => {
+      if (matchesBlob(el, url)) finish(true)
+    }
+    const onErr = () => {
+      if (el.currentSrc === url || el.src === url) finish(false)
+    }
+    const poll = window.setInterval(() => {
+      if (matchesBlob(el, url)) finish(true)
+    }, 40)
     const timer = window.setTimeout(() => finish(false), ms)
-    el.addEventListener(name, onHit)
+    el.addEventListener('loadeddata', onHit)
+    el.addEventListener('error', onErr)
   })
 }
 
@@ -457,6 +666,8 @@ declare global {
       chunk: () => string | null
       src: () => string
       time: () => number | null
+      ready: () => string[]
+      waiting: () => boolean
       scrollToFrame: (frame: number) => void
     }
   }
