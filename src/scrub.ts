@@ -28,6 +28,8 @@ type Entry = {
   reject: (error: unknown) => void
   started: boolean
   controller: AbortController | null
+  slot: 'urgent' | 'back' | null
+  preempted: boolean
 }
 
 type Buffer = {
@@ -128,33 +130,30 @@ export async function startScrub() {
   let urgentLive = 0
   let epoch = 0
 
-  let useDirect = false
-  const readyUrl = (chunk: Chunk) => (useDirect ? mediaUrl(chunk.file) : (cache.get(chunk.id)?.url ?? null))
-  // Safari 26 (AVFoundation) seeks a paused blob and updates currentTime, then
-  // leaves the decoded picture on frame 0 and never delivers a matching frame
-  // callback. Direct file URLs still present, so one failed blob seek leaves
-  // the blob cache and continues from the network.
-  const abandonBlobs = () => {
-    if (useDirect) return
-    useDirect = true
-    epoch += 1
-    for (const entry of cache.values()) entry.controller?.abort()
-    backQueue.length = 0
-    urgentQueue.length = 0
-    backLive = 0
-    urgentLive = 0
-  }
+  const readyUrl = (chunk: Chunk) => cache.get(chunk.id)?.url ?? null
 
-  // One background transfer plus one urgent transfer. The urgent slot stays
-  // free so a settled chunk starts immediately, and each id is fetched once.
+  // Safari restarts a range request every time a seek arrives before the last
+  // one finishes. On a 15–28 MB 1080p chunk that never completes, so the
+  // picture stays on the first frame. Each chunk is fetched once, in full,
+  // and the video element only ever sees that blob.
   const pumpDownloads = () => {
     while (urgentLive < 1 && urgentQueue.length > 0) {
       const chunk = urgentQueue.shift()
       if (!chunk || !beginDownload(chunk, 'urgent')) continue
     }
+    // A second transfer splits a 20 Mbps pipe. The chunk on screen goes first.
+    if (urgentLive > 0 || urgentQueue.length > 0) return
     while (backLive < 1 && backQueue.length > 0) {
       const chunk = backQueue.shift()
       if (!chunk || !beginDownload(chunk, 'back')) continue
+    }
+  }
+
+  const preemptBackground = (urgent: Chunk) => {
+    for (const [id, entry] of cache) {
+      if (id === urgent.id || entry.slot !== 'back' || !entry.controller || entry.url) continue
+      entry.preempted = true
+      entry.controller.abort()
     }
   }
 
@@ -162,6 +161,8 @@ export async function startScrub() {
     const entry = cache.get(chunk.id)
     if (!entry || entry.url || entry.started) return false
     entry.started = true
+    entry.slot = slot
+    entry.preempted = false
     if (slot === 'urgent') urgentLive += 1
     else backLive += 1
     const ticket = epoch
@@ -180,6 +181,16 @@ export async function startScrub() {
       })
       .catch((error: unknown) => {
         if (ticket !== epoch || cache.get(chunk.id) !== entry) return
+        if (entry.preempted) {
+          entry.preempted = false
+          entry.started = false
+          entry.slot = null
+          entry.controller = null
+          if (!urgentQueue.some((item) => item.id === chunk.id) && !backQueue.some((item) => item.id === chunk.id)) {
+            backQueue.unshift(chunk)
+          }
+          return
+        }
         cache.delete(chunk.id)
         entry.reject(error)
         const attempt = (retries.get(chunk.id) ?? 0) + 1
@@ -190,20 +201,22 @@ export async function startScrub() {
         if (ticket !== epoch) return
         if (slot === 'urgent') urgentLive = Math.max(0, urgentLive - 1)
         else backLive = Math.max(0, backLive - 1)
-        if (cache.get(chunk.id) === entry) entry.controller = null
+        if (cache.get(chunk.id) === entry && !entry.preempted) entry.controller = null
         pumpDownloads()
       })
     return true
   }
 
   const enqueue = (chunk: Chunk, urgent = false) => {
-    if (useDirect) return Promise.resolve(mediaUrl(chunk.file))
     const hit = cache.get(chunk.id)
     if (hit) {
-      if (urgent && !hit.url && !hit.started && !urgentQueue.some((item) => item.id === chunk.id)) {
-        const index = backQueue.findIndex((item) => item.id === chunk.id)
-        if (index >= 0) backQueue.splice(index, 1)
-        urgentQueue.unshift(chunk)
+      if (urgent && !hit.url && !hit.started) {
+        if (!urgentQueue.some((item) => item.id === chunk.id)) {
+          const index = backQueue.findIndex((item) => item.id === chunk.id)
+          if (index >= 0) backQueue.splice(index, 1)
+          urgentQueue.unshift(chunk)
+        }
+        preemptBackground(chunk)
         pumpDownloads()
       }
       return hit.promise
@@ -215,9 +228,19 @@ export async function startScrub() {
       reject = rej
     })
     void promise.catch(() => undefined)
-    cache.set(chunk.id, { promise, url: null, resolve, reject, started: false, controller: null })
+    cache.set(chunk.id, {
+      promise,
+      url: null,
+      resolve,
+      reject,
+      started: false,
+      controller: null,
+      slot: null,
+      preempted: false,
+    })
     if (urgent) urgentQueue.unshift(chunk)
     else backQueue.push(chunk)
+    if (urgent) preemptBackground(chunk)
     pumpDownloads()
     return promise
   }
@@ -534,7 +557,7 @@ export async function startScrub() {
     time: () => (front.el.classList.contains('is-live') ? front.el.currentTime : null),
     ready: () => chunks.filter((chunk) => readyUrl(chunk)).map((chunk) => chunk.id),
     waiting: () => wait.classList.contains('is-on'),
-    mode: () => (useDirect ? 'direct' : 'blob'),
+    mode: () => 'blob' as const,
     scrollToFrame,
   }
 
@@ -552,25 +575,17 @@ export async function startScrub() {
     if (stale()) return false
     const ready = await attachBlob(buf, job.chunk, url, gen)
     if (!ready || stale()) return false
-    const blob = url.startsWith('blob:')
-    if (blob && job.time > 1 / fps && buf.el.seekable.length === 0) {
-      const opened = await waitSeekable(buf.el, 500)
-      if (!opened || stale()) {
-        if (!stale()) abandonBlobs()
-        return false
-      }
+    if (job.time > 1 / fps && buf.el.seekable.length === 0) {
+      const opened = await waitSeekable(buf.el, 1200)
+      if (!opened || stale()) return false
     }
     const duration = buf.el.duration
     const safe =
       Number.isFinite(duration) && duration > 0.05
         ? Math.min(Math.max(job.time, 0), Math.max(0, duration - 0.5 / fps))
         : job.time
-    const presented = await seekPresented(buf, safe, gen, fps, blob)
-    if (stale()) return false
-    if (!presented) {
-      if (blob) abandonBlobs()
-      return false
-    }
+    const presented = await seekPresented(buf, safe, gen, fps)
+    if (stale() || !presented) return false
     buf.landedTime = buf.el.currentTime
     buf.el.pause()
     return true
@@ -606,7 +621,7 @@ function attachBlob(buf: Buffer, chunk: Chunk, url: string, gen: number) {
   // replaces the previous resource.
   buf.el.src = url
   if (!url.startsWith('blob:')) buf.el.load()
-  return once(buf.el, url, 8000).then((ok) => {
+  return once(buf.el, url, 12000).then((ok) => {
     if (!ok || gen !== buf.gen) return false
     buf.chunk = chunk
     return true
@@ -629,7 +644,7 @@ function waitSeekable(el: HTMLVideoElement, ms: number) {
   })
 }
 
-function seekPresented(buf: Buffer, safe: number, gen: number, fps: number, blob: boolean) {
+function seekPresented(buf: Buffer, safe: number, gen: number, fps: number) {
   const el = buf.el
   const tol = 1.25 / fps
   if (gen !== buf.gen) return Promise.resolve(false)
@@ -684,14 +699,11 @@ function seekPresented(buf: Buffer, safe: number, gen: number, fps: number, blob
         finish(false)
         return
       }
-      const held = buf.confirmedTime == null || Math.abs(buf.confirmedTime - safe) <= 1 / fps
-      // A callback after seeked that names a different time is the frame still
-      // on screen. Showing it would be the wrong frame, so a blob gives up and
-      // the file URL is tried. No callback at all means the browser did not
-      // present: accept a direct URL, or a blob that never left its confirmed
-      // frame, and otherwise switch.
+      // A callback that names a different time is the frame still on screen.
+      // Keep the last good frame and retry the same blob. Silence after
+      // currentTime has landed is a slow 1080p decode, not a reason to open
+      // the file over the network.
       if (samples > 0 && !matched) finish(false)
-      else if (blob && !held) finish(false)
       else finish(true)
     }
     const onSeeked = () => {
@@ -709,7 +721,7 @@ function seekPresented(buf: Buffer, safe: number, gen: number, fps: number, blob
       }
       watch = window.setTimeout(decide, 450)
     }
-    hard = window.setTimeout(() => finish(false), 1600)
+    hard = window.setTimeout(() => finish(false), 4000)
     const already = el.readyState >= 2 && Math.abs(el.currentTime - safe) <= 0.45 / fps
     // Register before the seek. Safari drops the frame callback when it is
     // attached only after `seeked`, and a paused blob then never paints again.
