@@ -38,13 +38,14 @@ body {
 
 #stage video {
   opacity: 0;
-  transition: opacity 80ms linear;
+  visibility: hidden;
+  transition: none;
 }
 
-#stage video.is-live { opacity: 1; }
-
-#stage video.no-fade,
-#stage.no-fade video { transition: none; }
+#stage video.is-live {
+  opacity: 1;
+  visibility: visible;
+}
 
 #poster {
   z-index: 2;

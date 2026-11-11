@@ -19,14 +19,15 @@ type Manifest = {
   scenes: Array<{ id: string; name: string; start_frame: number; end_frame: number }>
 }
 
-type Job = { chunk: Chunk; time: number; serial: number; onReady: () => void }
+type Job = { frame: number; chunk: Chunk; time: number; token: number }
 
-type Player = {
+type Buffer = {
   el: HTMLVideoElement
-  chunkId: string | null
-  busy: boolean
+  chunk: Chunk | null
+  gen: number
+  landedTime: number | null
   want: Job | null
-  serial: number
+  running: boolean
 }
 
 const PX_PER_FRAME = 12
@@ -107,11 +108,17 @@ export async function startScrub() {
   let chunks = manifest[tier].chunks
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
-  const players = [makePlayer(videoA), makePlayer(videoB)]
-  let shown: Player | null = null
+  const buffers = [makeBuffer(videoA), makeBuffer(videoB)]
+  let front = buffers[0]!
+  let back = buffers[1]!
   let targetFrame = 0
   let display = 0
   let loop = total * PX_PER_FRAME
+  let serial = 0
+  let chasing: number | null = null
+  let retryAt = 0
+  let progressHold = 0
+  let progressSpike: { progress: number; at: number } | null = null
 
   const lenis = new Lenis({
     lerp: reduced ? 1 : 0.075,
@@ -130,63 +137,98 @@ export async function startScrub() {
 
   const chunkAt = (frame: number) => chunks.find((chunk) => frame >= chunk.start_frame && frame <= chunk.end_frame) ?? chunks[0]!
 
-  const neighbor = (chunk: Chunk) => {
-    const index = chunks.findIndex((item) => item.id === chunk.id)
-    const step = lenis.direction < 0 ? -1 : 1
-    return chunks[(index + step + chunks.length) % chunks.length] ?? chunk
-  }
-
   const prime = () => {
-    for (const player of players) {
-      player.el.muted = true
-      const pending = player.el.play()
-      if (pending) pending.then(() => player.el.pause()).catch(() => undefined)
-    }
+    const hidden = back.el
+    hidden.muted = true
+    const pending = hidden.play()
+    if (pending) pending.then(() => hidden.pause()).catch(() => undefined)
   }
   window.addEventListener('pointerdown', prime, { once: true })
   window.addEventListener('wheel', prime, { passive: true, once: true })
   window.addEventListener('touchstart', prime, { passive: true, once: true })
   window.addEventListener('keydown', prime, { once: true })
 
-  const reveal = (player: Player) => {
-    const previous = shown?.chunkId ?? ''
-    const next = player.chunkId ?? ''
-    const loopJoin =
-      shown !== null &&
-      shown !== player &&
-      ((previous.endsWith('s06') && next.endsWith('s01')) || (previous.endsWith('s01') && next.endsWith('s06')))
-    stage.classList.toggle('no-fade', loopJoin || shown === null)
-    if (shown !== player) {
-      player.el.classList.add('is-live')
-      shown?.el.classList.remove('is-live')
-      shown = player
-    }
+  const shownFrame = () => {
+    if (!front.chunk || front.landedTime == null || !front.el.classList.contains('is-live')) return null
+    return front.chunk.start_frame + Math.round(front.landedTime * fps)
+  }
+
+  const showing = (frame: number) => {
+    const got = shownFrame()
+    if (got == null || !front.chunk) return false
+    if (front.chunk.id !== chunkAt(frame).id) return false
+    return Math.abs(got - frame) <= 1
+  }
+
+  const reveal = (buf: Buffer) => {
+    if (buf === front && buf.el.classList.contains('is-live')) return
+    buf.el.classList.add('is-live')
+    const other = buf === buffers[0] ? buffers[1]! : buffers[0]!
+    other.el.classList.remove('is-live')
+    other.el.pause()
+    front = buf
+    back = other
     poster.classList.add('is-hidden')
     loader.classList.add('is-done')
   }
 
-  let painted = -1
-  const present = (frame: number) => {
+  // Seek only the hidden element. Safari paints the first decoded frame of a file
+  // while a seek is in flight, so seeking the visible video (or crossfading in
+  // the preloaded neighbour) flashes another scene. Swap after the presented
+  // time matches, and otherwise keep the last correct frame.
+  const chase = (frame: number) => {
+    if (performance.now() < retryAt) return
+    if (showing(frame)) {
+      chasing = null
+      return
+    }
+    if (chasing != null && Math.abs(frame - chasing) <= 2 && chunkAt(frame).id === chunkAt(chasing).id) return
+    chasing = frame
     const chunk = chunkAt(frame)
-    if (frame === painted) return
-    painted = frame
     const time = (frame - chunk.start_frame) / fps
-    const visible = players.find((player) => player.chunkId === chunk.id) ?? players.find((player) => player !== shown) ?? players[0]!
-    requestSeek(visible, chunk, time, () => {
-      if (chunkAt(modFrame(display, total)).id === chunk.id) reveal(visible)
-    })
-    const other = players.find((player) => player !== visible)
-    if (!other) return
-    const ahead = neighbor(chunk)
-    if (other.chunkId === ahead.id) return
-    const edge = lenis.direction < 0 ? (ahead.frame_count - 1) / fps : 0
-    requestSeek(other, ahead, edge, () => undefined)
+    back.want = { frame, chunk, time, token: ++serial }
+    void runBuffer(back)
   }
 
-  const paint = (frame: number) => {
+  async function runBuffer(buf: Buffer) {
+    if (buf.running) return
+    buf.running = true
+    try {
+      while (buf.want && buf === back) {
+        const job = buf.want
+        buf.want = null
+        const gen = ++buf.gen
+        const ok = await land(buf, job, gen)
+        if (gen !== buf.gen || job.token !== serial) continue
+        if (!ok) {
+          chasing = null
+          retryAt = performance.now() + 40
+          continue
+        }
+        const landed = job.chunk.start_frame + Math.round((buf.landedTime ?? job.time) * fps)
+        const want = modFrame(display, total)
+        const span = Math.abs(landed - want) % total
+        const nearWant = job.chunk.id === chunkAt(want).id && Math.min(span, total - span) <= 3
+        if (buf.want) continue
+        if (!nearWant || showing(want)) {
+          chasing = null
+          continue
+        }
+        reveal(buf)
+        chasing = null
+      }
+    } finally {
+      buf.running = false
+      if (buf.want && buf === back) void runBuffer(buf)
+    }
+  }
+
+  const paint = (scrollFrame: number) => {
+    const pictured = shownFrame()
+    const frame = pictured ?? scrollFrame
     const scene = manifest.scenes.find((item) => frame >= item.start_frame && frame <= item.end_frame)
-    readout.textContent = `${scene?.id ?? 's01'}  ${String(frame).padStart(4, '0')}  /  ${total}`
-    bar.style.width = `${(frame / Math.max(1, total - 1)) * 100}%`
+    readout.textContent = `${scene?.id ?? ''}  ${String(frame).padStart(4, '0')}  /  ${total}`
+    bar.style.width = `${(scrollFrame / Math.max(1, total - 1)) * 100}%`
     let best = 0
     let beat = beats[0]
     for (const item of beats) {
@@ -205,7 +247,25 @@ export async function startScrub() {
       title.textContent = beat.title
       body.textContent = beat.body
     }
-    hint.classList.toggle('is-gone', frame > 48)
+    hint.classList.toggle('is-gone', scrollFrame > 48)
+  }
+
+  const readProgress = (now: number) => {
+    const progress = lenis.progress
+    if (!Number.isFinite(progress)) return progressHold
+    const jump = progress - progressHold
+    const wrap = (progressHold > 0.92 && progress < 0.08) || (progressHold < 0.08 && progress > 0.92)
+    if (!wrap && Math.abs(jump) > 0.35) {
+      if (!progressSpike || Math.abs(progress - progressSpike.progress) > 0.02) progressSpike = { progress, at: now }
+      else if (now - progressSpike.at > 80) {
+        progressHold = progress
+        progressSpike = null
+      }
+      return progressHold
+    }
+    progressSpike = null
+    progressHold = progress
+    return progress
   }
 
   let last = performance.now()
@@ -213,7 +273,8 @@ export async function startScrub() {
     const dt = Math.min(0.05, (now - last) / 1000)
     last = now
     lenis.raf(now)
-    const progress = lenis.progress
+    if (!front.el.paused) front.el.pause()
+    const progress = readProgress(now)
     targetFrame = Math.round(progress * total) % total
     const tau = reduced ? 0.02 : 0.09
     const gain = 1 - Math.exp(-dt / tau)
@@ -223,7 +284,7 @@ export async function startScrub() {
     else if (delta < -total / 2) from -= total
     display = from + (targetFrame - from) * gain
     const frame = modFrame(display, total)
-    present(frame)
+    chase(frame)
     paint(frame)
     requestAnimationFrame(tick)
   }
@@ -234,11 +295,25 @@ export async function startScrub() {
     if (next === tier) return
     tier = next
     chunks = manifest[tier].chunks
-    for (const player of players) player.chunkId = null
+    for (const buf of buffers) {
+      buf.chunk = null
+      buf.landedTime = null
+      buf.want = null
+      buf.gen += 1
+      buf.el.classList.remove('is-live')
+      buf.el.removeAttribute('src')
+      buf.el.load()
+    }
+    front = buffers[0]!
+    back = buffers[1]!
+    chasing = null
+    poster.classList.remove('is-hidden')
   })
 
   const scrollToFrame = (frame: number) => {
     const clamped = ((frame % total) + total) % total
+    progressHold = clamped / total
+    progressSpike = null
     lenis.scrollTo((clamped / total) * loop, { immediate: true, force: true })
     targetFrame = clamped
     display = clamped
@@ -246,93 +321,129 @@ export async function startScrub() {
 
   window.__scrub = {
     frame: () => modFrame(display, total),
+    shown: () => shownFrame(),
     target: () => targetFrame,
     tier: () => tier,
-    chunk: () => shown?.chunkId ?? null,
-    src: () => shown?.el.currentSrc ?? '',
+    chunk: () => (front.el.classList.contains('is-live') ? (front.chunk?.id ?? null) : null),
+    src: () => (front.el.classList.contains('is-live') ? front.el.currentSrc : ''),
+    time: () => (front.el.classList.contains('is-live') ? front.el.currentTime : null),
     scrollToFrame,
   }
 
-  present(0)
+  chase(0)
   paint(0)
   requestAnimationFrame(tick)
+
+  async function land(buf: Buffer, job: Job, gen: number) {
+    const stale = () => gen !== buf.gen || (buf.want != null && buf.want.token !== job.token)
+    const ready = await ensureSource(buf, job.chunk, gen)
+    if (!ready || stale()) return false
+    const duration = buf.el.duration
+    const limit = Number.isFinite(duration) ? Math.max(0, duration - 0.5 / fps) : job.time
+    const safe = Math.min(Math.max(job.time, 0), limit)
+    const sought = await seekTo(buf, safe, gen, fps)
+    if (!sought || stale()) return false
+    if (Math.abs(buf.el.currentTime - safe) > 1.25 / fps) return false
+    const presented = await presentedAt(buf.el, safe, fps)
+    if (!presented || stale()) return false
+    buf.landedTime = buf.el.currentTime
+    buf.el.pause()
+    return true
+  }
 }
 
-function makePlayer(el: HTMLVideoElement): Player {
+function makeBuffer(el: HTMLVideoElement): Buffer {
   el.muted = true
   el.playsInline = true
   el.preload = 'auto'
   el.disablePictureInPicture = true
-  return { el, chunkId: null, busy: false, want: null, serial: 0 }
+  return { el, chunk: null, gen: 0, landedTime: null, want: null, running: false }
 }
 
-function requestSeek(player: Player, chunk: Chunk, time: number, onReady: () => void) {
-  const job: Job = { chunk, time, serial: ++player.serial, onReady }
-  player.want = job
-  if (player.chunkId !== chunk.id) {
-    player.chunkId = chunk.id
-    player.el.pause()
-    player.el.src = mediaUrl(chunk.file)
-    player.el.load()
+function ensureSource(buf: Buffer, chunk: Chunk, gen: number) {
+  const file = chunk.file.split('/').pop() ?? chunk.file
+  if (buf.chunk?.id === chunk.id && buf.el.readyState >= 1 && buf.el.currentSrc.endsWith(file)) {
+    return Promise.resolve(gen === buf.gen)
   }
-  void pump(player)
+  buf.landedTime = null
+  buf.chunk = null
+  buf.el.pause()
+  buf.el.src = mediaUrl(chunk.file)
+  buf.el.load()
+  return once(buf.el, 'loadeddata', 20000).then((ok) => {
+    if (!ok || gen !== buf.gen || !buf.el.currentSrc.endsWith(file)) return false
+    buf.chunk = chunk
+    return true
+  })
 }
 
-async function pump(player: Player) {
-  if (player.busy) return
-  player.busy = true
-  try {
-    while (player.want) {
-      const job = player.want
-      player.want = null
-      const ok = await perform(player, job)
-      if (ok && job.serial === player.serial) job.onReady()
-    }
-  } finally {
-    player.busy = false
-    if (player.want) void pump(player)
-  }
-}
-
-function perform(player: Player, job: Job) {
+function seekTo(buf: Buffer, safe: number, gen: number, fps: number) {
+  if (gen !== buf.gen) return Promise.resolve(false)
+  if (buf.el.readyState >= 2 && Math.abs(buf.el.currentTime - safe) <= 0.45 / fps) return Promise.resolve(true)
   return new Promise<boolean>((resolve) => {
     let settled = false
     const finish = (ok: boolean) => {
       if (settled) return
       settled = true
+      buf.el.removeEventListener('seeked', onSeeked)
+      window.clearTimeout(timer)
+      resolve(ok && gen === buf.gen && Math.abs(buf.el.currentTime - safe) <= 1.25 / fps)
+    }
+    const onSeeked = () => finish(true)
+    const timer = window.setTimeout(() => finish(false), 1500)
+    buf.el.addEventListener('seeked', onSeeked)
+    try {
+      buf.el.currentTime = safe
+    } catch {
+      finish(false)
+    }
+  })
+}
+
+function presentedAt(el: HTMLVideoElement, safe: number, fps: number) {
+  const rvfc = el.requestVideoFrameCallback?.bind(el)
+  if (!rvfc) return Promise.resolve(Math.abs(el.currentTime - safe) <= 1.25 / fps)
+  return new Promise<boolean>((resolve) => {
+    let tries = 0
+    let settled = false
+    let saw = false
+    const finish = (ok: boolean) => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timer)
       resolve(ok)
     }
-    const go = () => {
-      if (player.chunkId !== job.chunk.id) return finish(false)
-      const duration = player.el.duration
-      const limit = Number.isFinite(duration) ? Math.max(0, duration - 1 / 24) : job.time
-      const safe = Math.min(Math.max(job.time, 0), limit)
-      if (player.el.readyState >= 2 && Math.abs(player.el.currentTime - safe) < 0.45 / 24) return finish(true)
-      const timer = window.setTimeout(() => finish(true), 200)
-      player.el.addEventListener(
-        'seeked',
-        () => {
-          window.clearTimeout(timer)
-          const presented = player.el.requestVideoFrameCallback?.bind(player.el)
-          if (presented) {
-            const late = window.setTimeout(() => finish(true), 48)
-            presented(() => {
-              window.clearTimeout(late)
-              finish(true)
-            })
-          } else finish(true)
-        },
-        { once: true },
-      )
-      try {
-        player.el.currentTime = safe
-      } catch {
-        window.clearTimeout(timer)
-        finish(false)
-      }
+    const timer = window.setTimeout(() => {
+      if (!saw) finish(Math.abs(el.currentTime - safe) <= 1.25 / fps)
+    }, 500)
+    const arm = () => {
+      rvfc((_now, meta) => {
+        if (settled) return
+        saw = true
+        const media = typeof meta.mediaTime === 'number' ? meta.mediaTime : el.currentTime
+        if (Math.abs(media - safe) <= 1.25 / fps) finish(true)
+        else if (++tries < 6) arm()
+        else finish(false)
+      })
     }
-    if (player.el.readyState >= 1 && player.chunkId === job.chunk.id) go()
-    else player.el.addEventListener('loadeddata', () => go(), { once: true })
+    arm()
+  })
+}
+
+function once(el: HTMLVideoElement, name: 'loadeddata', ms: number) {
+  if (el.readyState >= 2) return Promise.resolve(true)
+  return new Promise<boolean>((resolve) => {
+    let settled = false
+    const finish = (ok: boolean) => {
+      if (settled) return
+      settled = true
+      el.removeEventListener(name, onHit)
+      window.clearTimeout(timer)
+      resolve(ok)
+    }
+    const onHit = () => finish(true)
+    const timer = window.setTimeout(() => finish(false), ms)
+    el.addEventListener(name, onHit)
   })
 }
 
@@ -340,10 +451,12 @@ declare global {
   interface Window {
     __scrub?: {
       frame: () => number
+      shown: () => number | null
       target: () => number
       tier: () => Tier
       chunk: () => string | null
       src: () => string
+      time: () => number | null
       scrollToFrame: (frame: number) => void
     }
   }
