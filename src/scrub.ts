@@ -28,8 +28,6 @@ type Entry = {
   reject: (error: unknown) => void
   started: boolean
   controller: AbortController | null
-  slot: 'urgent' | 'back' | null
-  preempted: boolean
 }
 
 type Buffer = {
@@ -123,48 +121,30 @@ export async function startScrub() {
   let tier = chooseTier()
   let chunks = manifest[tier].chunks
   const cache = new Map<string, Entry>()
-  const backQueue: Chunk[] = []
-  const urgentQueue: Chunk[] = []
+  const pending: Chunk[] = []
   const retries = new Map<string, number>()
-  let backLive = 0
-  let urgentLive = 0
+  let inFlight = 0
   let epoch = 0
+  let direction = 1
+  let onCached: () => void = () => {}
 
   const readyUrl = (chunk: Chunk) => cache.get(chunk.id)?.url ?? null
 
-  // Safari restarts a range request every time a seek arrives before the last
-  // one finishes. On a 15–28 MB 1080p chunk that never completes, so the
-  // picture stays on the first frame. Each chunk is fetched once, in full,
-  // and the video element only ever sees that blob.
+  // Two full-file downloads, never aborted. Aborting a 4 s chunk every time a
+  // fling crosses a boundary threw the bytes away, so Chromium held one frame
+  // until the destination finally finished. Finished chunks stay cached.
   const pumpDownloads = () => {
-    while (urgentLive < 1 && urgentQueue.length > 0) {
-      const chunk = urgentQueue.shift()
-      if (!chunk || !beginDownload(chunk, 'urgent')) continue
-    }
-    // A second transfer splits a 20 Mbps pipe. The chunk on screen goes first.
-    if (urgentLive > 0 || urgentQueue.length > 0) return
-    while (backLive < 1 && backQueue.length > 0) {
-      const chunk = backQueue.shift()
-      if (!chunk || !beginDownload(chunk, 'back')) continue
+    while (inFlight < 2 && pending.length > 0) {
+      const chunk = pending.shift()
+      if (!chunk || !beginDownload(chunk)) continue
     }
   }
 
-  const preemptBackground = (urgent: Chunk) => {
-    for (const [id, entry] of cache) {
-      if (id === urgent.id || entry.slot !== 'back' || !entry.controller || entry.url) continue
-      entry.preempted = true
-      entry.controller.abort()
-    }
-  }
-
-  const beginDownload = (chunk: Chunk, slot: 'urgent' | 'back') => {
+  const beginDownload = (chunk: Chunk) => {
     const entry = cache.get(chunk.id)
     if (!entry || entry.url || entry.started) return false
     entry.started = true
-    entry.slot = slot
-    entry.preempted = false
-    if (slot === 'urgent') urgentLive += 1
-    else backLive += 1
+    inFlight += 1
     const ticket = epoch
     const controller = new AbortController()
     entry.controller = controller
@@ -178,49 +158,28 @@ export async function startScrub() {
         const url = URL.createObjectURL(blob)
         entry.url = url
         entry.resolve(url)
+        onCached()
       })
       .catch((error: unknown) => {
         if (ticket !== epoch || cache.get(chunk.id) !== entry) return
-        if (entry.preempted) {
-          entry.preempted = false
-          entry.started = false
-          entry.slot = null
-          entry.controller = null
-          if (!urgentQueue.some((item) => item.id === chunk.id) && !backQueue.some((item) => item.id === chunk.id)) {
-            backQueue.unshift(chunk)
-          }
-          return
-        }
         cache.delete(chunk.id)
         entry.reject(error)
         const attempt = (retries.get(chunk.id) ?? 0) + 1
         retries.set(chunk.id, attempt)
-        if (attempt <= 2) void enqueue(chunk, slot === 'urgent').catch(() => undefined)
+        if (attempt <= 2) void enqueue(chunk).catch(() => undefined)
       })
       .finally(() => {
         if (ticket !== epoch) return
-        if (slot === 'urgent') urgentLive = Math.max(0, urgentLive - 1)
-        else backLive = Math.max(0, backLive - 1)
-        if (cache.get(chunk.id) === entry && !entry.preempted) entry.controller = null
+        inFlight = Math.max(0, inFlight - 1)
+        if (cache.get(chunk.id) === entry) entry.controller = null
         pumpDownloads()
       })
     return true
   }
 
-  const enqueue = (chunk: Chunk, urgent = false) => {
+  const enqueue = (chunk: Chunk) => {
     const hit = cache.get(chunk.id)
-    if (hit) {
-      if (urgent && !hit.url && !hit.started) {
-        if (!urgentQueue.some((item) => item.id === chunk.id)) {
-          const index = backQueue.findIndex((item) => item.id === chunk.id)
-          if (index >= 0) backQueue.splice(index, 1)
-          urgentQueue.unshift(chunk)
-        }
-        preemptBackground(chunk)
-        pumpDownloads()
-      }
-      return hit.promise
-    }
+    if (hit) return hit.promise
     let resolve!: (url: string) => void
     let reject!: (error: unknown) => void
     const promise = new Promise<string>((res, rej) => {
@@ -228,21 +187,24 @@ export async function startScrub() {
       reject = rej
     })
     void promise.catch(() => undefined)
-    cache.set(chunk.id, {
-      promise,
-      url: null,
-      resolve,
-      reject,
-      started: false,
-      controller: null,
-      slot: null,
-      preempted: false,
-    })
-    if (urgent) urgentQueue.unshift(chunk)
-    else backQueue.push(chunk)
-    if (urgent) preemptBackground(chunk)
+    cache.set(chunk.id, { promise, url: null, resolve, reject, started: false, controller: null })
+    pending.push(chunk)
     pumpDownloads()
     return promise
+  }
+
+  const focusQueue = (focus: Chunk) => {
+    const origin = Math.max(0, chunks.findIndex((item) => item.id === focus.id))
+    const next: Chunk[] = []
+    for (let step = 0; step < chunks.length; step += 1) {
+      const chunk = chunks[(origin + direction * step + chunks.length * 8) % chunks.length]
+      const entry = chunk ? cache.get(chunk.id) : undefined
+      if (!chunk || !entry || entry.url || entry.started) continue
+      next.push(chunk)
+    }
+    pending.length = 0
+    pending.push(...next)
+    pumpDownloads()
   }
 
   const resetDownloads = () => {
@@ -250,11 +212,9 @@ export async function startScrub() {
     for (const entry of cache.values()) entry.controller?.abort()
     for (const entry of cache.values()) if (entry.url) URL.revokeObjectURL(entry.url)
     cache.clear()
-    backQueue.length = 0
-    urgentQueue.length = 0
+    pending.length = 0
     retries.clear()
-    backLive = 0
-    urgentLive = 0
+    inFlight = 0
   }
 
   const loopDist = (a: number, b: number) => {
@@ -285,8 +245,10 @@ export async function startScrub() {
   const queueTier = (startIndex: number) => {
     for (let step = 0; step < chunks.length; step += 1) {
       const chunk = chunks[(startIndex + step) % chunks.length]
-      if (chunk) enqueue(chunk, false)
+      if (chunk) enqueue(chunk)
     }
+    const first = chunks[startIndex]
+    if (first) focusQueue(first)
   }
   queueTier(0)
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -299,6 +261,7 @@ export async function startScrub() {
   let loop = total * PX_PER_FRAME
   let serial = 0
   let chasing: number | null = null
+  let flinging = false
   let retryAt = 0
   let progressHold = 0
   let progressSpike: { progress: number; at: number } | null = null
@@ -366,6 +329,13 @@ export async function startScrub() {
       return
     }
     if (chasing != null && Math.abs(frame - chasing) <= 2 && chunkAt(frame).id === chunkAt(chasing).id) return
+    // A hard fling retargets every few frames. Replacing the hidden seek each
+    // time means it never presents, so the picture holds. Let it land unless a
+    // much closer cached frame is ready.
+    if (flinging && back.running && chasing != null) {
+      const here = modFrame(display, total)
+      if (loopDist(frame, here) + 48 >= loopDist(chasing, here)) return
+    }
     chasing = frame
     const chunk = chunkAt(frame)
     const time = (frame - chunk.start_frame) / fps
@@ -462,6 +432,13 @@ export async function startScrub() {
     chase(near)
   }
 
+  onCached = () => {
+    const frame = modFrame(display, total)
+    const chunk = chunkAt(frame)
+    if (readyUrl(chunk)) chase(frame)
+    else showNearest(frame)
+  }
+
   let prevAim = 0
   let prevAimAt = performance.now()
   let settleTimer = 0
@@ -469,19 +446,25 @@ export async function startScrub() {
   const aim = (frame: number, now: number) => {
     const dt = Math.max(0.016, (now - prevAimAt) / 1000)
     const speed = loopDist(frame, prevAim) / dt
+    let delta = frame - prevAim
+    if (delta > total / 2) delta -= total
+    if (delta < -total / 2) delta += total
+    if (Math.abs(delta) > 2) direction = delta > 0 ? 1 : -1
     prevAim = frame
     prevAimAt = now
     const chunk = chunkAt(frame)
+    focusQueue(chunk)
     const go = () => {
       if (readyUrl(chunk)) chase(frame)
       else showNearest(frame)
     }
+    flinging = speed > 120
     if (speed > 120) {
       window.clearTimeout(settleTimer)
       settleTimer = window.setTimeout(() => {
         const settled = modFrame(display, total)
         const next = chunkAt(settled)
-        void enqueue(next, true).catch(() => undefined)
+        void enqueue(next).catch(() => undefined)
         if (readyUrl(next)) chase(settled)
         else showNearest(settled)
       }, 160)
@@ -491,7 +474,7 @@ export async function startScrub() {
       return
     }
     window.clearTimeout(settleTimer)
-    void enqueue(chunk, true).catch(() => undefined)
+    void enqueue(chunk).catch(() => undefined)
     go()
   }
 
@@ -569,7 +552,7 @@ export async function startScrub() {
     const stale = () => gen !== buf.gen || (buf.want != null && buf.want.token !== job.token) || job.token !== serial
     const url = readyUrl(job.chunk)
     if (!url) {
-      void enqueue(job.chunk, true).catch(() => undefined)
+      void enqueue(job.chunk).catch(() => undefined)
       return false
     }
     if (stale()) return false
