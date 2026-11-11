@@ -35,6 +35,7 @@ type Buffer = {
   chunk: Chunk | null
   gen: number
   landedTime: number | null
+  confirmedTime: number | null
   want: Job | null
   running: boolean
 }
@@ -127,7 +128,22 @@ export async function startScrub() {
   let urgentLive = 0
   let epoch = 0
 
-  const readyUrl = (chunk: Chunk) => cache.get(chunk.id)?.url ?? null
+  let useDirect = false
+  const readyUrl = (chunk: Chunk) => (useDirect ? mediaUrl(chunk.file) : (cache.get(chunk.id)?.url ?? null))
+  // Safari 26 (AVFoundation) seeks a paused blob and updates currentTime, then
+  // leaves the decoded picture on frame 0 and never delivers a matching frame
+  // callback. Direct file URLs still present, so one failed blob seek leaves
+  // the blob cache and continues from the network.
+  const abandonBlobs = () => {
+    if (useDirect) return
+    useDirect = true
+    epoch += 1
+    for (const entry of cache.values()) entry.controller?.abort()
+    backQueue.length = 0
+    urgentQueue.length = 0
+    backLive = 0
+    urgentLive = 0
+  }
 
   // One background transfer plus one urgent transfer. The urgent slot stays
   // free so a settled chunk starts immediately, and each id is fetched once.
@@ -181,6 +197,7 @@ export async function startScrub() {
   }
 
   const enqueue = (chunk: Chunk, urgent = false) => {
+    if (useDirect) return Promise.resolve(mediaUrl(chunk.file))
     const hit = cache.get(chunk.id)
     if (hit) {
       if (urgent && !hit.url && !hit.started && !urgentQueue.some((item) => item.id === chunk.id)) {
@@ -517,6 +534,7 @@ export async function startScrub() {
     time: () => (front.el.classList.contains('is-live') ? front.el.currentTime : null),
     ready: () => chunks.filter((chunk) => readyUrl(chunk)).map((chunk) => chunk.id),
     waiting: () => wait.classList.contains('is-on'),
+    mode: () => (useDirect ? 'direct' : 'blob'),
     scrollToFrame,
   }
 
@@ -534,14 +552,25 @@ export async function startScrub() {
     if (stale()) return false
     const ready = await attachBlob(buf, job.chunk, url, gen)
     if (!ready || stale()) return false
+    const blob = url.startsWith('blob:')
+    if (blob && job.time > 1 / fps && buf.el.seekable.length === 0) {
+      const opened = await waitSeekable(buf.el, 500)
+      if (!opened || stale()) {
+        if (!stale()) abandonBlobs()
+        return false
+      }
+    }
     const duration = buf.el.duration
-    const limit = Number.isFinite(duration) ? Math.max(0, duration - 0.5 / fps) : job.time
-    const safe = Math.min(Math.max(job.time, 0), limit)
-    const sought = await seekTo(buf, safe, gen, fps)
-    if (!sought || stale()) return false
-    if (Math.abs(buf.el.currentTime - safe) > 1.25 / fps) return false
-    const presented = await presentedAt(buf.el, safe, fps)
-    if (!presented || stale()) return false
+    const safe =
+      Number.isFinite(duration) && duration > 0.05
+        ? Math.min(Math.max(job.time, 0), Math.max(0, duration - 0.5 / fps))
+        : job.time
+    const presented = await seekPresented(buf, safe, gen, fps, blob)
+    if (stale()) return false
+    if (!presented) {
+      if (blob) abandonBlobs()
+      return false
+    }
     buf.landedTime = buf.el.currentTime
     buf.el.pause()
     return true
@@ -553,21 +582,30 @@ function makeBuffer(el: HTMLVideoElement): Buffer {
   el.playsInline = true
   el.preload = 'auto'
   el.disablePictureInPicture = true
-  return { el, chunk: null, gen: 0, landedTime: null, want: null, running: false }
+  return { el, chunk: null, gen: 0, landedTime: null, confirmedTime: null, want: null, running: false }
 }
 
-function matchesBlob(el: HTMLVideoElement, url: string) {
-  return el.currentSrc === url && el.readyState >= 2 && !el.error
+function sameSource(el: HTMLVideoElement, url: string) {
+  if (el.readyState < 2 || el.error || !el.currentSrc) return false
+  if (el.currentSrc === url) return true
+  try {
+    return el.currentSrc === new URL(url, window.location.href).href
+  } catch {
+    return false
+  }
 }
 
 function attachBlob(buf: Buffer, chunk: Chunk, url: string, gen: number) {
-  if (buf.chunk?.id === chunk.id && matchesBlob(buf.el, url)) return Promise.resolve(gen === buf.gen)
+  if (buf.chunk?.id === chunk.id && sameSource(buf.el, url)) return Promise.resolve(gen === buf.gen)
   buf.landedTime = null
+  buf.confirmedTime = null
   buf.chunk = null
   buf.el.pause()
-  // Setting src starts the load. Calling load() immediately after makes WebKit
-  // cancel the blob and fail with MEDIA_ERR_SRC_NOT_SUPPORTED.
+  // Setting src starts the load. Calling load() immediately after a blob URL
+  // makes WebKit cancel it. A network URL still needs load() so Safari
+  // replaces the previous resource.
   buf.el.src = url
+  if (!url.startsWith('blob:')) buf.el.load()
   return once(buf.el, url, 8000).then((ok) => {
     if (!ok || gen !== buf.gen) return false
     buf.chunk = chunk
@@ -575,61 +613,122 @@ function attachBlob(buf: Buffer, chunk: Chunk, url: string, gen: number) {
   })
 }
 
-function seekTo(buf: Buffer, safe: number, gen: number, fps: number) {
+function waitSeekable(el: HTMLVideoElement, ms: number) {
+  if (el.seekable.length > 0) return Promise.resolve(true)
+  return new Promise<boolean>((resolve) => {
+    let timer = 0
+    const finish = () => {
+      window.clearTimeout(timer)
+      el.removeEventListener('progress', finish)
+      el.removeEventListener('loadedmetadata', finish)
+      resolve(el.seekable.length > 0)
+    }
+    timer = window.setTimeout(finish, ms)
+    el.addEventListener('progress', finish)
+    el.addEventListener('loadedmetadata', finish)
+  })
+}
+
+function seekPresented(buf: Buffer, safe: number, gen: number, fps: number, blob: boolean) {
+  const el = buf.el
+  const tol = 1.25 / fps
   if (gen !== buf.gen) return Promise.resolve(false)
-  if (buf.el.readyState >= 2 && Math.abs(buf.el.currentTime - safe) <= 0.45 / fps) return Promise.resolve(true)
   return new Promise<boolean>((resolve) => {
     let settled = false
+    let samples = 0
+    let matched = false
+    let handle = 0
+    let watch = 0
+    let hard = 0
+    const timeOk = () => Math.abs(el.currentTime - safe) <= tol
     const finish = (ok: boolean) => {
       if (settled) return
       settled = true
-      buf.el.removeEventListener('seeked', onSeeked)
-      window.clearTimeout(timer)
-      resolve(ok && gen === buf.gen && Math.abs(buf.el.currentTime - safe) <= 1.25 / fps)
+      el.removeEventListener('seeked', onSeeked)
+      window.clearTimeout(watch)
+      window.clearTimeout(hard)
+      if (gen !== buf.gen) {
+        resolve(false)
+        return
+      }
+      if (handle && el.cancelVideoFrameCallback) el.cancelVideoFrameCallback(handle)
+      const accepted = ok && timeOk()
+      if (accepted) buf.confirmedTime = el.currentTime
+      el.pause()
+      resolve(accepted)
     }
-    const onSeeked = () => finish(true)
-    const timer = window.setTimeout(() => finish(false), 1500)
-    buf.el.addEventListener('seeked', onSeeked)
+    const rvfc = el.requestVideoFrameCallback?.bind(el)
+    const onFrame = (_now: number, meta: { mediaTime?: number }) => {
+      if (settled || gen !== buf.gen) return
+      samples += 1
+      const media = typeof meta.mediaTime === 'number' ? meta.mediaTime : el.currentTime
+      // mediaTime can update before currentTime. Remember the match and reveal
+      // once seeked has caught up, so a single callback is not thrown away.
+      if (Math.abs(media - safe) <= tol) {
+        matched = true
+        if (timeOk()) finish(true)
+        return
+      }
+      if (rvfc) handle = rvfc(onFrame)
+    }
+    const arm = () => {
+      if (rvfc) handle = rvfc(onFrame)
+    }
+    const decide = () => {
+      if (settled) return
+      if (matched && timeOk()) {
+        finish(true)
+        return
+      }
+      if (!timeOk()) {
+        finish(false)
+        return
+      }
+      const held = buf.confirmedTime == null || Math.abs(buf.confirmedTime - safe) <= 1 / fps
+      // A callback after seeked that names a different time is the frame still
+      // on screen. Showing it would be the wrong frame, so a blob gives up and
+      // the file URL is tried. No callback at all means the browser did not
+      // present: accept a direct URL, or a blob that never left its confirmed
+      // frame, and otherwise switch.
+      if (samples > 0 && !matched) finish(false)
+      else if (blob && !held) finish(false)
+      else finish(true)
+    }
+    const onSeeked = () => {
+      if (gen !== buf.gen) {
+        finish(false)
+        return
+      }
+      if (!timeOk()) {
+        finish(false)
+        return
+      }
+      if (matched) {
+        finish(true)
+        return
+      }
+      watch = window.setTimeout(decide, 450)
+    }
+    hard = window.setTimeout(() => finish(false), 1600)
+    const already = el.readyState >= 2 && Math.abs(el.currentTime - safe) <= 0.45 / fps
+    // Register before the seek. Safari drops the frame callback when it is
+    // attached only after `seeked`, and a paused blob then never paints again.
+    arm()
+    if (already) {
+      watch = window.setTimeout(decide, 280)
+      return
+    }
+    el.addEventListener('seeked', onSeeked)
     try {
-      buf.el.currentTime = safe
+      el.currentTime = safe
     } catch {
       finish(false)
     }
   })
 }
 
-function presentedAt(el: HTMLVideoElement, safe: number, fps: number) {
-  const rvfc = el.requestVideoFrameCallback?.bind(el)
-  if (!rvfc) return Promise.resolve(Math.abs(el.currentTime - safe) <= 1.25 / fps)
-  return new Promise<boolean>((resolve) => {
-    let tries = 0
-    let settled = false
-    let saw = false
-    const finish = (ok: boolean) => {
-      if (settled) return
-      settled = true
-      window.clearTimeout(timer)
-      resolve(ok)
-    }
-    const timer = window.setTimeout(() => {
-      if (!saw) finish(Math.abs(el.currentTime - safe) <= 1.25 / fps)
-    }, 500)
-    const arm = () => {
-      rvfc((_now, meta) => {
-        if (settled) return
-        saw = true
-        const media = typeof meta.mediaTime === 'number' ? meta.mediaTime : el.currentTime
-        if (Math.abs(media - safe) <= 1.25 / fps) finish(true)
-        else if (++tries < 6) arm()
-        else finish(false)
-      })
-    }
-    arm()
-  })
-}
-
 function once(el: HTMLVideoElement, url: string, ms: number) {
-  if (matchesBlob(el, url)) return Promise.resolve(true)
+  if (sameSource(el, url)) return Promise.resolve(true)
   return new Promise<boolean>((resolve) => {
     let settled = false
     const finish = (ok: boolean) => {
@@ -639,16 +738,16 @@ function once(el: HTMLVideoElement, url: string, ms: number) {
       el.removeEventListener('error', onErr)
       window.clearInterval(poll)
       window.clearTimeout(timer)
-      resolve(ok && matchesBlob(el, url))
+      resolve(ok && sameSource(el, url))
     }
     const onHit = () => {
-      if (matchesBlob(el, url)) finish(true)
+      if (sameSource(el, url)) finish(true)
     }
     const onErr = () => {
       if (el.currentSrc === url || el.src === url) finish(false)
     }
     const poll = window.setInterval(() => {
-      if (matchesBlob(el, url)) finish(true)
+      if (sameSource(el, url)) finish(true)
     }, 40)
     const timer = window.setTimeout(() => finish(false), ms)
     el.addEventListener('loadeddata', onHit)
@@ -668,6 +767,7 @@ declare global {
       time: () => number | null
       ready: () => string[]
       waiting: () => boolean
+      mode: () => 'blob' | 'direct'
       scrollToFrame: (frame: number) => void
     }
   }

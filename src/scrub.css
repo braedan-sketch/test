@@ -36,15 +36,17 @@ body {
 
 #stage { z-index: 1; pointer-events: none; }
 
+/* The idle clip stays transparent, not visibility:hidden. WebKit will not
+   finish a seek or deliver a frame callback for a visibility:hidden video,
+   which left the reel on frame 0. */
 #stage video {
   opacity: 0;
-  visibility: hidden;
+  pointer-events: none;
   transition: none;
 }
 
 #stage video.is-live {
   opacity: 1;
-  visibility: visible;
 }
 
 #poster {
